@@ -3216,6 +3216,61 @@ describe('documents API', () => {
     expect(await readAccent()).toBeNull();
   });
 
+  test('default_accent carries over to a copy, a folder document and a bundle import', async () => {
+    const created = await upload(CLIENT_A);
+    const admin = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const call = (path: string, init: RequestInit = {}) =>
+      app.hono.fetch(new Request(`http://test${path}`, { headers: admin, ...init }));
+    const accentOf = async (uid: string, h: Headers) =>
+      (
+        (await (
+          await app.hono.fetch(new Request(`http://test/api/documents/${uid}`, { headers: h }))
+        ).json()) as { default_accent: string | null }
+      ).default_accent;
+
+    const set = await call(`/api/documents/${created.uid}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify({ default_accent: '#e0115f' }),
+    });
+    expect(set.status).toBe(200);
+
+    const copyRes = await call(`/api/documents/${created.uid}/copy`, {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Copy' }),
+    });
+    expect(copyRes.status).toBe(201);
+    const copy = (await copyRes.json()) as { uid: string; admin_invite: { token: string } };
+    expect(
+      await accentOf(copy.uid, withInvite(headersFor(CLIENT_A), copy.admin_invite.token)),
+    ).toBe('#e0115f');
+
+    const folderRes = await call('/api/documents', {
+      method: 'POST',
+      body: JSON.stringify({ folder: created.uid, name: 'Notes', source: '# Notes\n' }),
+    });
+    expect(folderRes.status).toBe(201);
+    const folderDoc = (await folderRes.json()) as { uid: string; default_accent: string | null };
+    expect(folderDoc.default_accent).toBe('#e0115f');
+    expect(await accentOf(folderDoc.uid, admin)).toBe('#e0115f');
+
+    const bundle = await (await call(`/api/documents/${created.uid}/export`)).json();
+    expect((bundle as { document: { default_accent: string } }).document.default_accent).toBe(
+      '#e0115f',
+    );
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_A),
+        body: JSON.stringify(bundle),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as { uid: string; admin_invite: { token: string } };
+    expect(
+      await accentOf(imported.uid, withInvite(headersFor(CLIENT_A), imported.admin_invite.token)),
+    ).toBe('#e0115f');
+  });
+
   test('password auth supports session-only cookies and explicit logout', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret',

@@ -1,6 +1,6 @@
 import { ResetIcon } from '@radix-ui/react-icons';
 import { Flex, IconButton, Text, Tooltip } from '@radix-ui/themes';
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type RefObject, useEffect, useRef, useState } from 'react';
 import {
   type DocColorRole,
   effectiveBackground,
@@ -8,6 +8,7 @@ import {
   setDocColor,
   useDocColors,
 } from '../lib/doc-colors.js';
+import { useThemeMeasure } from '../lib/useThemeMeasure.js';
 
 interface Props {
   docUid: string;
@@ -35,12 +36,9 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
 
   // What the theme shows without an override, so the swatch starts there.
   // Measured off the live DOM because the dark palettes leave the paper
-  // transparent. Theme stylesheets load async, hence the `load` listener;
-  // Radix's Theme flips its `dark` class a render after the appearance
-  // changes, hence the observer on it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mode and theme change what the DOM shows, which is read, not referenced.
-  useLayoutEffect(() => {
-    const measure = () => {
+  // transparent.
+  useThemeMeasure(
+    () => {
       const next: Partial<Record<DocColorRole, string>> = {};
       if (!colors.bg) {
         const bg = effectiveBackground(paperRef.current);
@@ -51,17 +49,10 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
         if (fg) next.fg = fg;
       }
       setThemeColors((prev) => ({ ...prev, ...next }));
-    };
-    measure();
-    document.head.addEventListener('load', measure, true);
-    const appRoot = paperRef.current?.closest('.radix-themes');
-    const observer = new MutationObserver(measure);
-    if (appRoot) observer.observe(appRoot, { attributes: true, attributeFilter: ['class'] });
-    return () => {
-      document.head.removeEventListener('load', measure, true);
-      observer.disconnect();
-    };
-  }, [paperRef, inkRef, colors.bg, colors.fg, mode, theme]);
+    },
+    paperRef,
+    [inkRef, colors.bg, colors.fg, mode, theme],
+  );
 
   return (
     <>

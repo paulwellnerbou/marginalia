@@ -1,6 +1,6 @@
 import { normalizeAccent } from '@marginalia/themes/accent';
 import { Button } from '@radix-ui/themes';
-import { type RefObject, useLayoutEffect, useState } from 'react';
+import { type RefObject, useState } from 'react';
 import {
   type Document,
   type DocumentSettingsResponse,
@@ -9,15 +9,16 @@ import {
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import {
   accentResetTarget,
+  announceDocAccentDefault,
   clearDocAccentOverride,
   resetDocAccent,
   setDocAccent,
-  setDocAccentDefault,
   useDocAccent,
 } from '../lib/doc-accent.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
+import { useThemeMeasure } from '../lib/useThemeMeasure.js';
 import { ColorRow } from './DocColorControls.js';
 
 /**
@@ -46,27 +47,16 @@ export function AccentControl({
 
   // What the theme shows without a pick, so the swatch starts there.
   // Only while nothing is picked: a pick replaces the variable inline.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: theme changes what the DOM shows, which is read, not referenced.
-  useLayoutEffect(() => {
-    if (accent !== null) return;
-    const measure = () => {
+  useThemeMeasure(
+    () => {
       const el = inkRef.current;
-      if (!el) return;
+      if (accent !== null || !el) return;
       const hex = cssColorToHex(getComputedStyle(el).getPropertyValue('--md-color-accent'));
       if (hex) setThemeAccent(hex);
-    };
-    measure();
-    // Theme stylesheets load async; Radix flips its `dark` class a render
-    // after the appearance changes.
-    document.head.addEventListener('load', measure, true);
-    const appRoot = inkRef.current?.closest('.radix-themes');
-    const observer = new MutationObserver(measure);
-    if (appRoot) observer.observe(appRoot, { attributes: true, attributeFilter: ['class'] });
-    return () => {
-      document.head.removeEventListener('load', measure, true);
-      observer.disconnect();
-    };
-  }, [inkRef, accent, theme]);
+    },
+    inkRef,
+    [accent, theme],
+  );
 
   async function makeDefault() {
     if (!onDocSettingsChanged) return;
@@ -74,7 +64,7 @@ export function AccentControl({
     setSaving(true);
     try {
       const result = await updateDocumentSettings(doc.uid, { default_accent: accent }, identity);
-      setDocAccentDefault(doc.uid, result.default_accent);
+      announceDocAccentDefault(doc.uid, result.default_accent);
       clearDocAccentOverride(doc.uid);
       onDocSettingsChanged(doc.uid, { default_accent: result.default_accent });
     } catch (err) {

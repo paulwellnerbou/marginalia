@@ -15,6 +15,21 @@ function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+const REPORT_PAPER = '#f6f5f1';
+const REPORT_INK = '#23221f';
+
+/** `a` over `b` at `alpha`, in sRGB like the theme's color-mix. */
+function mix(a: string, b: string, alpha: number): string {
+  const ch = (hex: string, i: number) => Number.parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+  return `#${[0, 1, 2]
+    .map((i) =>
+      Math.round(ch(a, i) * alpha + ch(b, i) * (1 - alpha))
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`;
+}
+
 const PICKS = [
   '#d6ec4e',
   '#ffcc00',
@@ -54,8 +69,21 @@ describe('accentPalette', () => {
     expect(accentPalette('#d6ec4e', 'dark').accent).toBe('#d6ec4e');
   });
 
-  test('the bright shade is the pick itself on a light page', () => {
+  test("the report theme's own lime survives as the bright shade", () => {
     expect(accentPalette('#d6ec4e', 'light').bright).toBe('#d6ec4e');
+  });
+
+  test('selected text stays readable on the report selection (60% bright on paper)', () => {
+    for (const pick of [...PICKS, '#1f3864']) {
+      const selection = mix(accentPalette(pick, 'light').bright, REPORT_PAPER, 0.6);
+      expect(contrast(REPORT_INK, selection)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  test('a pale pick still shows as a bar on light paper', () => {
+    for (const pick of ['#fff4c2', '#ffffff', '#f0f0ff']) {
+      expect(contrast(accentPalette(pick, 'light').bright, REPORT_PAPER)).toBeGreaterThan(1.15);
+    }
   });
 
   test('a pale pick is deepened for rules on a light page, kept on a dark one', () => {

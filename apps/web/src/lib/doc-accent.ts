@@ -1,6 +1,6 @@
 import { normalizeAccent } from '@marginalia/themes/accent';
-import { useLayoutEffect, useSyncExternalStore } from 'react';
-import { docViewUidOf, readDocViewPref, writeDocViewPref } from './doc-view-prefs.js';
+import { useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
+import { liveDocViewPref, setLiveDocViewPref, useLiveDocViewPref } from './doc-view-prefs.js';
 
 /**
  * The accent color a document is shown with: the reader's own pick, else
@@ -13,28 +13,39 @@ import { docViewUidOf, readDocViewPref, writeDocViewPref } from './doc-view-pref
  * included) follows it without threading it through as a prop.
  */
 
-/** Stored when the reader wants the theme's accent over a document default. */
-const THEME_OVERRIDE = 'theme';
+/**
+ * Stored as `theme:<default>` when the reader prefers the theme's accent
+ * over a document default: it opts out of that default only, so a new
+ * default, or none, ends it.
+ */
+const THEME_PREFIX = 'theme:';
 
 export interface DocAccent {
   /** What the document is shown with; null is the theme's own. */
   accent: string | null;
-  /** The reader's stored choice: a hex, `'theme'`, or null to follow the document. */
+  /** The reader's choice in force: a hex, `'theme'`, or null to follow the document. */
   override: string | null;
   docDefault: string | null;
 }
 
-/** What a stored override and the document's default come to. */
-export function effectiveAccent(override: string | null, docDefault: string | null): string | null {
-  if (override === THEME_OVERRIDE) return null;
-  return normalizeAccent(override) ?? docDefault;
+/** What a stored choice comes to against the document's current default. */
+export function resolveAccent(raw: string | null, docDefault: string | null): DocAccent {
+  let override: string | null;
+  if (raw?.startsWith(THEME_PREFIX)) {
+    override =
+      docDefault !== null && raw.slice(THEME_PREFIX.length) === docDefault ? 'theme' : null;
+  } else {
+    override = normalizeAccent(raw);
+  }
+  const accent = override === 'theme' ? null : (override ?? docDefault);
+  return { accent, override, docDefault };
 }
 
 /** What to store for a choice (a hex, or null for the theme's): nothing when it is the document's. */
 export function accentOverrideFor(next: string | null, docDefault: string | null): string | null {
   const accent = normalizeAccent(next);
   if (accent === docDefault) return null;
-  return accent ?? THEME_OVERRIDE;
+  return accent ?? `${THEME_PREFIX}${docDefault}`;
 }
 
 /**
@@ -46,89 +57,48 @@ export function accentResetTarget(state: DocAccent): 'document' | 'theme' | null
   return state.docDefault !== null ? 'theme' : null;
 }
 
-interface Cached {
-  raw: string | null;
-  value: DocAccent;
-}
+// --- Document defaults ----------------------------------------------
 
 const docDefaults = new Map<string, string | null>();
-const cache = new Map<string, Cached>();
-const listeners = new Set<() => void>();
-const NONE: DocAccent = { accent: null, override: null, docDefault: null };
+const defaultListeners = new Set<() => void>();
+/** Tells this browser's other tabs about a default changed here. */
+let channel: BroadcastChannel | null | undefined;
 
-function build(uid: string, raw: string | null): Cached {
-  const override = raw === THEME_OVERRIDE ? raw : normalizeAccent(raw);
-  const docDefault = docDefaults.get(uid) ?? null;
-  return { raw, value: { accent: effectiveAccent(override, docDefault), override, docDefault } };
-}
-
-function snapshot(uid: string): DocAccent {
-  let entry = cache.get(uid);
-  if (!entry) {
-    entry = build(uid, readDocViewPref(uid, 'accent'));
-    cache.set(uid, entry);
+function openChannel(): BroadcastChannel | null {
+  if (channel === undefined) {
+    channel =
+      typeof BroadcastChannel === 'undefined'
+        ? null
+        : new BroadcastChannel('marginalia.doc-accent-default');
+    channel?.addEventListener('message', (event: MessageEvent) => {
+      const { uid, accent } = (event.data ?? {}) as { uid?: unknown; accent?: unknown };
+      if (typeof uid === 'string') setDocAccentDefault(uid, normalizeAccent(accent));
+    });
   }
-  return entry.value;
+  return channel;
 }
 
-function notify(): void {
-  for (const l of listeners) l();
+function subscribeDefaults(listener: () => void): () => void {
+  openChannel();
+  defaultListeners.add(listener);
+  return () => defaultListeners.delete(listener);
 }
 
-/** Another tab changed this document's view settings; only an accent change re-renders. */
-function onStorage(event: StorageEvent): void {
-  if (event.key === null) cache.clear();
-  else {
-    const uid = docViewUidOf(event.key);
-    const entry = uid === null ? undefined : cache.get(uid);
-    if (uid === null || !entry) return;
-    const raw = readDocViewPref(uid, 'accent');
-    if (raw === entry.raw) return;
-    cache.set(uid, build(uid, raw));
-  }
-  notify();
-}
-
-function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0) window.addEventListener('storage', onStorage);
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) window.removeEventListener('storage', onStorage);
-  };
-}
-
-/** Store the reader's choice: a hex, `'theme'`, or null to follow the document. */
-function writeOverride(uid: string, raw: string | null): void {
-  cache.set(uid, build(uid, raw));
-  writeDocViewPref(uid, 'accent', raw);
-  notify();
-}
-
-/** The reader picks an accent (a hex), or the theme's own (null). */
-export function setDocAccent(uid: string, next: string | null): void {
-  writeOverride(uid, accentOverrideFor(next, docDefaults.get(uid) ?? null));
-}
-
-/** Takes the step `accentResetTarget` names. */
-export function resetDocAccent(uid: string): void {
-  const state = snapshot(uid);
-  if (state.override !== null) writeOverride(uid, null);
-  else if (state.docDefault !== null) writeOverride(uid, THEME_OVERRIDE);
-}
-
-/** After the reader's choice became the document's default, they follow it. */
-export function clearDocAccentOverride(uid: string): void {
-  writeOverride(uid, null);
+function defaultOf(uid: string): string | null {
+  return docDefaults.get(uid) ?? null;
 }
 
 export function setDocAccentDefault(uid: string, accent: string | null): void {
   const next = normalizeAccent(accent);
   if (docDefaults.has(uid) && docDefaults.get(uid) === next) return;
   docDefaults.set(uid, next);
-  const entry = cache.get(uid);
-  if (entry) cache.set(uid, build(uid, entry.raw));
-  notify();
+  for (const l of defaultListeners) l();
+}
+
+/** A default this tab just saved: here and in this browser's other tabs. */
+export function announceDocAccentDefault(uid: string, accent: string | null): void {
+  setDocAccentDefault(uid, accent);
+  openChannel()?.postMessage({ uid, accent: normalizeAccent(accent) });
 }
 
 /**
@@ -144,6 +114,29 @@ export function useDocAccentDefault(
   }, [uid, accent]);
 }
 
+// --- The reader's choice --------------------------------------------
+
+/** The reader picks an accent (a hex), or the theme's own (null). */
+export function setDocAccent(uid: string, next: string | null): void {
+  setLiveDocViewPref(uid, 'accent', accentOverrideFor(next, defaultOf(uid)));
+}
+
+/** Takes the step `accentResetTarget` names. */
+export function resetDocAccent(uid: string): void {
+  const state = resolveAccent(liveDocViewPref(uid, 'accent'), defaultOf(uid));
+  if (state.override !== null) setLiveDocViewPref(uid, 'accent', null);
+  else if (state.docDefault !== null) {
+    setLiveDocViewPref(uid, 'accent', `${THEME_PREFIX}${state.docDefault}`);
+  }
+}
+
+/** After the reader's choice became the document's default, they follow it. */
+export function clearDocAccentOverride(uid: string): void {
+  setLiveDocViewPref(uid, 'accent', null);
+}
+
 export function useDocAccent(uid: string | undefined): DocAccent {
-  return useSyncExternalStore(subscribe, () => (uid ? snapshot(uid) : NONE));
+  const raw = useLiveDocViewPref(uid, 'accent');
+  const docDefault = useSyncExternalStore(subscribeDefaults, () => (uid ? defaultOf(uid) : null));
+  return useMemo(() => resolveAccent(raw, docDefault), [raw, docDefault]);
 }

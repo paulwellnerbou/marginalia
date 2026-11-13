@@ -14,7 +14,7 @@ export interface AccentPalette {
   accent: string;
   /** Underlines and other quiet accent lines; translucent so any paper shows through. */
   muted: string;
-  /** Bars, fills and markers, where the pick itself can be bright. */
+  /** Bars, fills and selection: the pick, kept light enough to sit behind text. */
   bright: string;
   /** Rules and ornaments: a mid tone, visible on paper without competing with text. */
   ornament: string;
@@ -32,7 +32,14 @@ export function normalizeAccent(value: unknown): string | null {
 /** OKLCH lightness bounds for accent text, ~4.5:1 or better on the themes' pages. */
 const LIGHT_TEXT_MAX_L = 0.5;
 const DARK_TEXT_MIN_L = 0.78;
-/** A bar darker than this disappears on a dark page. */
+/**
+ * Bright-shade lightness bounds. On a light page it fills the selection
+ * behind text, so it stays light, and draws bars, so it stays off the
+ * paper; the report theme's lime sits at 0.9. A bar darker than the
+ * dark bound disappears on a dark page.
+ */
+const LIGHT_BRIGHT_MIN_L = 0.7;
+const LIGHT_BRIGHT_MAX_L = 0.9;
 const DARK_BRIGHT_MIN_L = 0.6;
 /** Ornament lightness bounds: no lighter than the report theme's tan rule on a light page. */
 const LIGHT_ORNAMENT_MAX_L = 0.72;
@@ -44,8 +51,11 @@ export function accentPalette(hex: string, mode: AccentMode): AccentPalette {
   const [l, c, h] = hexToOklch(hex);
   const textL = mode === 'light' ? Math.min(l, LIGHT_TEXT_MAX_L) : Math.max(l, DARK_TEXT_MIN_L);
   const accent = oklchToHex(textL, c, h);
-  const bright =
-    mode === 'light' ? hex.toLowerCase() : oklchToHex(Math.max(l, DARK_BRIGHT_MIN_L), c, h);
+  const brightL =
+    mode === 'light'
+      ? Math.min(Math.max(l, LIGHT_BRIGHT_MIN_L), LIGHT_BRIGHT_MAX_L)
+      : Math.max(l, DARK_BRIGHT_MIN_L);
+  const bright = brightL === l ? hex.toLowerCase() : oklchToHex(brightL, c, h);
   const ornament = oklchToHex(
     mode === 'light' ? Math.min(l, LIGHT_ORNAMENT_MAX_L) : Math.max(l, DARK_ORNAMENT_MIN_L),
     c,

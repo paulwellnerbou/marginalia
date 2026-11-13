@@ -11,7 +11,7 @@ import {
   spanHead,
   splitMarkdownChapters,
 } from '@marginalia/renderer';
-import { accentCssVars, normalizeAccent } from '@marginalia/themes/accent';
+import { normalizeAccent } from '@marginalia/themes/accent';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
@@ -68,6 +68,7 @@ import {
   PROPOSAL_ANSWERS_JSON_SQL,
   parseAnswerIds,
 } from '../db.js';
+import { accentOverrideCss, exportAccent } from '../export/accent-css.js';
 import { type EpubChapter, type EpubCover, exportEpub } from '../export/epub.js';
 import {
   countLiveMermaidBlocks,
@@ -2051,24 +2052,6 @@ async function exportDocumentAsDocx(
 }
 
 // --- GET /api/documents/:uid/export.pdf ------------------------------
-
-/**
- * The reader's accent for an export: `none` for the theme's own, a hex
- * for a pick, nothing for the document's default.
- */
-function exportAccent(param: string | undefined, docDefault: string | null): string | null {
-  if (param === 'none') return null;
-  return normalizeAccent(param) ?? docDefault;
-}
-
-/** Exports print light, so only the light shades. Appended, so it wins over the theme. */
-function accentOverrideCss(accent: string | null): string {
-  if (!accent) return '';
-  const decls = Object.entries(accentCssVars(accent, 'light'))
-    .map(([k, v]) => `${k}: ${v};`)
-    .join(' ');
-  return `\n.marginalia-theme, .marginalia { ${decls} }\n`;
-}
 
 /**
  * PDF export. Renders the document's source to HTML via the shared
