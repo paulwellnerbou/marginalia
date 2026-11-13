@@ -10,6 +10,7 @@ import {
   getActiveMention,
 } from '../src/components/inline-comments/InlineComposer.js';
 import {
+  cardCanReopen,
   inlineAvatarInitials,
   threadCountLabel,
 } from '../src/components/inline-comments/inlineUtils.js';
@@ -170,55 +171,56 @@ describe('emoji shortcode autocomplete', () => {
   });
 });
 
-describe('threads-tab filters', () => {
-  function makeThread(over: {
-    id: string;
-    state?: Thread['state'];
-    resolution?: Thread['resolution'];
-    proposal?: Thread['proposal'];
-    /** client_ids of the messages, oldest first. */
-    authors?: [string, ...string[]];
-    /** created_at of the first message; the rest follow one apart. */
-    at?: number;
-  }): Thread {
-    return {
-      id: over.id,
-      state: over.state ?? 'open',
-      resolution: over.resolution ?? null,
-      link_status: 'linked',
-      anchor: {
-        block_id: 'b1',
-        quote: 'quote',
-        prefix: '',
-        suffix: '',
-        start_offset: 0,
-        end_offset: 5,
-        heading_path: null,
-        section_index: null,
-        section_index_path: null,
-      },
-      capabilities: {
-        reply: true,
-        resolve: true,
-        accept: false,
-        reject: false,
-        repair: false,
-        reopen: false,
-      },
-      comments: (over.authors ?? ['c']).map((clientId, i) => ({
-        id: `${over.id}-c${i + 1}`,
-        body: 'hi',
-        author: { client_id: clientId, display_name: clientId === 'me' ? 'Me' : 'Bob' },
-        capabilities: { edit: true, delete: true, react: true },
-        reactions: [],
-        created_at: (over.at ?? 1) + i,
-        updated_at: (over.at ?? 1) + i,
-      })) as [Thread['comments'][0], ...Thread['comments'][0][]],
-      answered_by_thread_ids: [],
-      proposal: over.proposal ?? null,
-    };
-  }
+function makeThread(over: {
+  id: string;
+  state?: Thread['state'];
+  resolution?: Thread['resolution'];
+  proposal?: Thread['proposal'];
+  /** client_ids of the messages, oldest first. */
+  authors?: [string, ...string[]];
+  /** created_at of the first message; the rest follow one apart. */
+  at?: number;
+  reopen?: boolean;
+}): Thread {
+  return {
+    id: over.id,
+    state: over.state ?? 'open',
+    resolution: over.resolution ?? null,
+    link_status: 'linked',
+    anchor: {
+      block_id: 'b1',
+      quote: 'quote',
+      prefix: '',
+      suffix: '',
+      start_offset: 0,
+      end_offset: 5,
+      heading_path: null,
+      section_index: null,
+      section_index_path: null,
+    },
+    capabilities: {
+      reply: true,
+      resolve: true,
+      accept: false,
+      reject: false,
+      repair: false,
+      reopen: over.reopen ?? false,
+    },
+    comments: (over.authors ?? ['c']).map((clientId, i) => ({
+      id: `${over.id}-c${i + 1}`,
+      body: 'hi',
+      author: { client_id: clientId, display_name: clientId === 'me' ? 'Me' : 'Bob' },
+      capabilities: { edit: true, delete: true, react: true },
+      reactions: [],
+      created_at: (over.at ?? 1) + i,
+      updated_at: (over.at ?? 1) + i,
+    })) as [Thread['comments'][0], ...Thread['comments'][0][]],
+    answered_by_thread_ids: [],
+    proposal: over.proposal ?? null,
+  };
+}
 
+describe('threads-tab filters', () => {
   const openComment = makeThread({ id: 'open-comment' });
   const resolvedComment = makeThread({
     id: 'resolved-comment',
@@ -438,5 +440,32 @@ describe('comment body clipping', () => {
     // treating that as an overflow would flash a toggle on every mount.
     expect(isClipped(0, 0)).toBe(false);
     expect(isClipped(500, 0)).toBe(false);
+  });
+});
+
+describe('cardCanReopen', () => {
+  const proposal = { whole_document: false, answers_thread_ids: [] };
+  const decided = (kind: 'resolve' | 'accept' | 'reject') => ({
+    state: 'resolved' as const,
+    resolution: { kind, at: 2, by_name: 'Bob' },
+    reopen: true,
+  });
+
+  test('offers a resolved comment and a rejected proposal', () => {
+    expect(cardCanReopen(makeThread({ id: 'c', ...decided('resolve') }))).toBe(true);
+    expect(cardCanReopen(makeThread({ id: 'p', proposal, ...decided('reject') }))).toBe(true);
+  });
+
+  test('never an accepted proposal, though the server would reopen it', () => {
+    expect(cardCanReopen(makeThread({ id: 'p', proposal, ...decided('accept') }))).toBe(false);
+  });
+
+  test('only what the server lets the viewer reopen', () => {
+    const rejected = makeThread({ id: 'p', proposal, ...decided('reject'), reopen: false });
+    expect(cardCanReopen(rejected)).toBe(false);
+  });
+
+  test('nothing still open', () => {
+    expect(cardCanReopen(makeThread({ id: 'p', proposal, reopen: true }))).toBe(false);
   });
 });

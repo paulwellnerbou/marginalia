@@ -2144,9 +2144,26 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       }
       try {
         if (kind === 'resolve' || kind === 'reopen') {
-          const updated = await apiResolve(doc.uid, id, kind === 'resolve', identity, body);
+          const { thread: updated, reopenedAnsweredThreadIds } = await apiResolve(
+            doc.uid,
+            id,
+            kind === 'resolve',
+            identity,
+            body,
+          );
           landThread(updated);
-          reconcileThreadsSoon();
+          if (reopenedAnsweredThreadIds.length > 0) {
+            void landAnsweredThreads(reopenedAnsweredThreadIds).then(reconcileThreadsSoon);
+            // Another proposal's accept had closed these; they come back
+            // with no click of the user's on them, so say why.
+            const n = reopenedAnsweredThreadIds.length;
+            showToast({
+              title: n === 1 ? 'Comment reopened' : `${n} comments reopened`,
+              body: `This proposal answers ${n === 1 ? 'it' : 'them'}, so ${n === 1 ? 'it stays' : 'they stay'} open until the proposal is decided.`,
+            });
+          } else {
+            reconcileThreadsSoon();
+          }
         } else if (kind === 'accept') {
           const {
             thread: updated,

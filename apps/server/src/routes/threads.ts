@@ -2020,7 +2020,11 @@ async function respondToThread(c: Context, deps: AppDeps) {
     if (!isProposal) {
       if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
     } else if (resolution?.kind === 'reject') {
-      if (!canEdit(decision.role) && !isAuthor) return c.json({ error: 'forbidden' }, 403);
+      // Unlike withdrawing by rejecting, reopening puts the change up again,
+      // so an author needs to still be allowed to propose.
+      if (!canEdit(decision.role) && !(isAuthor && canPropose(decision.role))) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
     } else if (resolution?.kind === 'accept') {
       if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
       const reopenable = await loadReopenableAcceptedThreadIds(doc, deps, [row]);
@@ -2993,7 +2997,7 @@ async function toThreadWire(
         (!proposal
           ? isRootAuthor || isAdmin
           : resolution?.kind === 'reject'
-            ? decision.ok && (canEdit(decision.role) || isRootAuthor)
+            ? decision.ok && (canEdit(decision.role) || (isRootAuthor && canPropose(decision.role)))
             : resolution?.kind === 'accept'
               ? decision.ok && canEdit(decision.role) && reopenableAccepted.has(row.id)
               : false),

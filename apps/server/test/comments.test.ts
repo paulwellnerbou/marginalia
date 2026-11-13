@@ -3920,10 +3920,14 @@ describe('threads API', () => {
 
     // `state=all` by default: these cases follow a comment and the
     // proposal answering it through acceptance, which resolves both.
-    async function threadsOf(uid: string, state: 'all' | 'open' = 'all'): Promise<ThreadShape[]> {
+    async function threadsOf(
+      uid: string,
+      state: 'all' | 'open' = 'all',
+      viewer: typeof ALICE = ALICE,
+    ): Promise<ThreadShape[]> {
       const res = await app.hono.fetch(
         new Request(`http://test/api/documents/${uid}/threads?state=${state}`, {
-          headers: headersFor(ALICE),
+          headers: headersFor(viewer),
         }),
       );
       return ((await res.json()) as { threads: ThreadShape[] }).threads;
@@ -4270,6 +4274,66 @@ describe('threads API', () => {
       const threads = await threadsOf(uid);
       // The request stands — it just wasn't answered this way.
       expect(threads.find((t) => t.id === commentId)!.state).toBe('open');
+    });
+
+    test('a rejected proposal can be reopened by an editor or its author, and decided again', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const proposal = (await propose(uid, BOB, blockId, '# Fixed')).id as string;
+      expect((await respond(uid, proposal, 'reject')).status).toBe(200);
+
+      const reopenFor = async (who: typeof ALICE) =>
+        (await threadsOf(uid, 'all', who)).find((t) => t.id === proposal)!.capabilities.reopen;
+      expect(await reopenFor(ALICE)).toBe(true);
+      expect(await reopenFor(BOB)).toBe(true);
+      expect(await reopenFor(CAROL)).toBe(false);
+
+      const asCarol = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${proposal}/respond`, {
+          method: 'POST',
+          headers: headersFor(CAROL),
+          body: JSON.stringify({ action: 'reopen' }),
+        }),
+      );
+      expect(asCarol.status).toBe(403);
+
+      const asBob = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${proposal}/respond`, {
+          method: 'POST',
+          headers: headersFor(BOB),
+          body: JSON.stringify({ action: 'reopen' }),
+        }),
+      );
+      expect(asBob.status).toBe(200);
+      const { thread: reopened } = (await asBob.json()) as { thread: ThreadShape };
+      expect(reopened.state).toBe('open');
+      expect(reopened.resolution).toBeNull();
+      expect(reopened.capabilities.reopen).toBe(false);
+      expect(reopened.capabilities.reject).toBe(true);
+
+      expect((await respond(uid, proposal, 'accept')).status).toBe(200);
+      const accepted = (await threadsOf(uid)).find((t) => t.id === proposal)!;
+      expect(accepted.resolution?.kind).toBe('accept');
+    });
+
+    test('an author who can no longer propose cannot reopen their rejected proposal', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const proposal = (await propose(uid, BOB, blockId, '# Fixed')).id as string;
+      expect((await respond(uid, proposal, 'reject')).status).toBe(200);
+      inviteByClientId.set(BOB.id, await createInvite(uid, BOB.name, 'reader'));
+
+      const asBob = (await threadsOf(uid, 'all', BOB)).find((t) => t.id === proposal)!;
+      expect(asBob.capabilities.reopen).toBe(false);
+
+      const reopen = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${proposal}/respond`, {
+          method: 'POST',
+          headers: headersFor(BOB),
+          body: JSON.stringify({ action: 'reopen' }),
+        }),
+      );
+      expect(reopen.status).toBe(403);
     });
 
     test('reopening a rejected proposal orphans it if an accept took its block', async () => {
