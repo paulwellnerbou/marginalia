@@ -15,11 +15,10 @@ import type { Document, DocumentFormat } from '../lib/api.js';
 import { createFolderDocument, moveToFolder } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { syncDocToken } from '../lib/folder.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
-import { updateOpenTabToken } from '../lib/open-tabs.js';
-import { loadRecentDocs, type RecentDoc, updateRecentDocToken } from '../lib/recent-docs.js';
+import { loadRecentDocs, type RecentDoc } from '../lib/recent-docs.js';
 import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
 import {
   DISPLAY_NAME_REQUIRED,
@@ -109,9 +108,7 @@ export function NewFolderDocumentDialog({
       // Its own link opens nothing now; the folder's opens it, here and on
       // every device the keyring reaches.
       saveInviteToken(picked.uid, folderToken);
-      updateRecentDocToken(picked.uid, folderToken);
-      updateOpenTabToken(picked.uid, folderToken);
-      keyringPushDoc(picked.uid, folderToken, picked.title);
+      syncDocToken(picked.uid, folderToken, picked.title);
       setOpen(false);
       reset();
       navigate(`/d/${picked.uid}`);

@@ -450,19 +450,18 @@ async function moveToFolder(c: Context, deps: AppDeps) {
   const folderRef = typeof body.folder === 'string' ? body.folder : '';
   const folderToken = typeof body.folder_admin_token === 'string' ? body.folder_admin_token : '';
 
+  // Admin first: the answer below says whether the document is in a folder.
+  const ownGate = accessDocument(db, doc) ?? doc;
+  if (!requireAdminInvite(c, db, ownGate.uid)) return c.json({ error: 'forbidden' }, 403);
   if (doc.folder_uid) {
     return c.json({ error: 'already-in-folder', folder_uid: doc.folder_uid }, 409);
   }
-  if (!requireAdminInvite(c, db, doc.uid)) return c.json({ error: 'forbidden' }, 403);
 
   const target = loadDoc(db, folderRef);
   const main = target ? accessDocument(db, target) : null;
   if (!main) return c.json({ error: 'folder-not-found' }, 404);
   if (main.uid === doc.uid) return c.json({ error: 'same-document' }, 400);
-  const folderAdmin = db
-    .prepare(`SELECT 1 FROM invites WHERE token = ? AND doc_uid = ? AND kind = 'admin'`)
-    .get(folderToken, main.uid);
-  if (!folderAdmin) return c.json({ error: 'forbidden' }, 403);
+  if (!adminInvite(db, folderToken, main.uid)) return c.json({ error: 'forbidden' }, 403);
 
   const result = db.transaction(() => {
     // Re-read inside the transaction: either side may have changed since.
@@ -473,32 +472,31 @@ async function moveToFolder(c: Context, deps: AppDeps) {
     if (!gate || gate.folder_uid) return 'folder-not-found' as const;
 
     // Each ring that can open the folder keeps the document with the
-    // folder's link; a ring that only held this document's links loses
-    // it, as those links open nothing any more.
+    // strongest folder link it holds; a ring that only held this
+    // document's links loses it, as those open nothing any more. A group
+    // link is no credential (authorize ignores it), so it never counts.
     db.prepare(
       `UPDATE keyring_docs
           SET invite_token = (
             SELECT k2.invite_token FROM keyring_docs k2
-              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?
+              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?1 AND i.kind <> 'group'
              WHERE k2.keyring_token = keyring_docs.keyring_token
+             ORDER BY CASE i.role WHEN 'admin' THEN 4 WHEN 'editor' THEN 3
+                                  WHEN 'collaborator' THEN 2 ELSE 1 END DESC
              LIMIT 1)
-        WHERE doc_uid = ?
+        WHERE doc_uid = ?2
           AND EXISTS (
             SELECT 1 FROM keyring_docs k2
-              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?
+              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?1 AND i.kind <> 'group'
              WHERE k2.keyring_token = keyring_docs.keyring_token)`,
-    ).run(main.uid, doc.uid, main.uid);
+    ).run(main.uid, doc.uid);
     db.prepare(
       `DELETE FROM keyring_docs
         WHERE doc_uid = ?
           AND invite_token NOT IN (SELECT token FROM invites WHERE doc_uid = ?)`,
     ).run(doc.uid, main.uid);
 
-    // Upload URLs minted through these invites die with them.
-    db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
-    deleteDocNameHistory(db, doc.uid);
-    db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
-    db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
+    dropOwnAccess(db, doc.uid);
     db.prepare(
       `UPDATE documents
           SET folder_uid = ?, password_hash = NULL, password_recovery_ciphertext = NULL,
@@ -1310,17 +1308,13 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   db.prepare('DELETE FROM comment_reactions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM thread_bookmarks WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
-  db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
-  deleteDocNameHistory(db, doc.uid);
-  db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+  dropOwnAccess(db, doc.uid);
   db.prepare('DELETE FROM document_assets WHERE doc_uid = ?').run(doc.uid);
   // Every ring's copy of an invite token for this doc, across all the
   // owner's devices and anyone else they shared a token with. Reads
   // already drop rows whose document is gone, so this is about not
   // leaving dead credentials in the store, not about correctness.
   db.prepare('DELETE FROM keyring_docs WHERE doc_uid = ?').run(doc.uid);
-  // The invites these pointed at went with the doc's invites above.
-  db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM asset_upload_tickets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM source_upload_tickets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
@@ -3887,8 +3881,32 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
 
 function requireAdminInvite(c: Context, db: Database, docUid: string): InviteRow | null {
   const invite = readInvite(db, c.req.raw.headers, docUid);
-  if (!invite || invite.kind !== 'admin' || invite.role !== 'admin') return null;
-  return invite;
+  return isAdminInvite(invite) ? invite : null;
+}
+
+/** The admin link `token` of `docUid`, for one that arrives other than in the header. */
+function adminInvite(db: Database, token: string, docUid: string): InviteRow | null {
+  const invite = db
+    .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+    .get(token, docUid) as InviteRow | null;
+  return isAdminInvite(invite) ? invite : null;
+}
+
+function isAdminInvite(invite: InviteRow | null): invite is InviteRow {
+  return invite?.kind === 'admin' && invite.role === 'admin';
+}
+
+/**
+ * Every way into `docUid` that is its own: invites (and the upload URLs
+ * minted through them), personal-link name history, password and invite
+ * sessions, agent-key invites. A document that is deleted or joins a
+ * folder loses all of them, and new per-document access belongs here.
+ */
+function dropOwnAccess(db: Database, docUid: string): void {
+  db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(docUid);
+  deleteDocNameHistory(db, docUid);
+  db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(docUid);
+  db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(docUid);
 }
 
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {

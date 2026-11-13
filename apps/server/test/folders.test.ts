@@ -508,6 +508,41 @@ describe('document folders', () => {
     expect((await read(draft.uid, admin)).status).toBe(200);
   });
 
+  test("a moved document's own group link and claimed sessions stop opening it", async () => {
+    const story = await createStory();
+    const draft = await createStory();
+    const group = await call(`/api/documents/${draft.uid}/invites`, {
+      method: 'POST',
+      headers: asInvite(ALICE, draft.admin_invite.token),
+      body: JSON.stringify({ kind: 'group', role: 'collaborator' }),
+    });
+    expect(group.status).toBe(201);
+    const groupToken = ((await group.json()) as { invite: { token: string } }).invite.token;
+    const claim = await call(`/api/documents/${draft.uid}/invites/${groupToken}/claim`, {
+      method: 'POST',
+      headers: headersFor(BOB),
+    });
+    expect(claim.status).toBe(201);
+    const cookie = (claim.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+    expect(cookie).toMatch(new RegExp(`^${INVITE_SESSION_COOKIE}=`));
+    expect((await read(draft.uid, headersFor(BOB, { cookie }))).status).toBe(200);
+
+    const res = await moveIn(
+      draft.uid,
+      draft.admin_invite.token,
+      story.uid,
+      story.admin_invite.token,
+    );
+    expect(res.status).toBe(200);
+
+    expect((await read(draft.uid, headersFor(BOB, { cookie }))).status).toBe(401);
+    const reclaim = await call(`/api/documents/${draft.uid}/invites/${groupToken}/claim`, {
+      method: 'POST',
+      headers: headersFor(BOB),
+    });
+    expect(reclaim.status).not.toBe(201);
+  });
+
   test('moving a document in takes an admin link on both sides', async () => {
     const story = await createStory();
     const draft = await createStory();
@@ -538,6 +573,14 @@ describe('document folders', () => {
     const draft = await createStory();
     expect((await moveIn(draft.uid, draft.admin_invite.token, outline, token)).status).toBe(200);
     expect((await moveIn(draft.uid, token, other.uid, other.admin_invite.token)).status).toBe(409);
+    // Without its admin link, nothing says the document is in a folder.
+    const anonymous = await call(`/api/documents/${draft.uid}/move-to-folder`, {
+      method: 'POST',
+      headers: headersFor(BOB),
+      body: JSON.stringify({ folder: other.uid, folder_admin_token: other.admin_invite.token }),
+    });
+    expect(anonymous.status).toBe(403);
+    expect(JSON.stringify(await anonymous.json())).not.toContain(story.uid);
 
     // A main document would strand its folder.
     expect((await moveIn(story.uid, token, other.uid, other.admin_invite.token)).status).toBe(409);
@@ -551,6 +594,8 @@ describe('document folders', () => {
 
   test("keyrings keep a moved document with the folder's link, or let it go", async () => {
     const story = await createStory();
+    const outline = await addOutline(story);
+    const aliceReader = await invite(story, 'reader');
     const draft = await createStory();
     const bobOnDraft = await invite(draft, 'reader');
 
@@ -572,7 +617,9 @@ describe('document folders', () => {
       }
       return headers;
     }
+    // The weaker folder link comes first: the strongest one must win.
     const alice = await ring(ALICE, [
+      [outline, aliceReader],
       [story.uid, story.admin_invite.token],
       [draft.uid, draft.admin_invite.token],
     ]);
