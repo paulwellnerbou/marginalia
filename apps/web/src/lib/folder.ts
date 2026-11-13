@@ -1,5 +1,8 @@
 import type { DocumentFolder } from './api.js';
 import { loadInviteToken, saveInviteToken } from './invite.js';
+import { pushDoc as keyringPushDoc } from './keyring.js';
+import { updateOpenTabToken } from './open-tabs.js';
+import { updateRecentDocToken } from './recent-docs.js';
 
 /**
  * A folder is the documents that share one set of access: its main
@@ -54,4 +57,15 @@ export function replaceFolderToken(
     changed.push(uid);
   }
   return changed;
+}
+
+/**
+ * Carry a document's new token beyond the token store: the recent list,
+ * the open tabs, and every device its keyring reaches. Without this a
+ * replaced token locks the other stores, and devices, out of it.
+ */
+export function syncDocToken(uid: string, token: string, title?: string): void {
+  keyringPushDoc(uid, token, title);
+  updateRecentDocToken(uid, token);
+  updateOpenTabToken(uid, token);
 }

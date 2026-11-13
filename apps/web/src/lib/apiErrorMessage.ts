@@ -84,6 +84,10 @@ const MESSAGES: Record<string, string> = {
   'folder-not-empty':
     'Other documents belong with this one and would lose their access. Delete them together, or delete them first.',
   'folder-not-found': 'The document this was meant to go with no longer exists.',
+  'already-in-folder': 'That document already belongs with another one.',
+  'has-folder-documents':
+    'Other documents belong with that one, and would lose their access if it moved.',
+  'same-document': 'A document cannot be moved in beside itself.',
   'name-required': 'Give the document a name first.',
 
   // Content

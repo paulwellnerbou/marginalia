@@ -738,6 +738,28 @@ export function createFolderDocument(
 }
 
 /**
+ * Move the standalone document `uid` into the folder `folderUid` belongs
+ * to. Sent with `uid`'s own admin link; the folder's admin link goes in
+ * the body. Its own links stop working, its discussion stays.
+ */
+export function moveToFolder(
+  uid: string,
+  folderUid: string,
+  folderAdminToken: string,
+  identity: Identity | null,
+): Promise<{ uid: string; folder_uid: string }> {
+  return request<{ uid: string; folder_uid: string }>(
+    `/api/documents/${encodeURIComponent(uid)}/move-to-folder`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ folder: folderUid, folder_admin_token: folderAdminToken }),
+      identity,
+      docUid: uid,
+    },
+  );
+}
+
+/**
  * 'full' carries the document's whole working life — revision history,
  * threads, comments, edit proposals. 'clean' takes only the text as it
  * stands, with the history cut and the discussion left behind.

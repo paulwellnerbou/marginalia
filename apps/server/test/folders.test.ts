@@ -434,6 +434,217 @@ describe('document folders', () => {
     expect(mention_candidates).toContain('Bob');
   });
 
+  function moveIn(
+    uid: string,
+    adminToken: string,
+    folder: string,
+    folderToken: string,
+  ): Promise<Response> {
+    return call(`/api/documents/${uid}/move-to-folder`, {
+      method: 'POST',
+      headers: asInvite(ALICE, adminToken),
+      body: JSON.stringify({ folder, folder_admin_token: folderToken }),
+    });
+  }
+
+  test("a document moved into a folder opens with the folder's links and keeps its discussion", async () => {
+    const story = await createStory();
+    const bobOnStory = await invite(story, 'collaborator');
+    const draft = await createStory({ source: '= Draft\n\nIn AsciiDoc.\n', format: 'asciidoc' });
+    const bobOnDraft = await invite(draft, 'editor');
+
+    const before = await read(draft.uid, asInvite(ALICE, draft.admin_invite.token));
+    const { rendered } = (await before.json()) as { rendered: { blocks: Array<{ id: string }> } };
+    const thread = await call(`/api/documents/${draft.uid}/threads`, {
+      method: 'POST',
+      headers: asInvite(ALICE, draft.admin_invite.token),
+      body: JSON.stringify({
+        anchor: { block_id: rendered.blocks.find((b) => b.id)?.id, quote: 'Draft' },
+        body: 'keep me',
+      }),
+    });
+    expect(thread.status).toBe(201);
+
+    const res = await moveIn(
+      draft.uid,
+      draft.admin_invite.token,
+      story.uid,
+      story.admin_invite.token,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ uid: draft.uid, folder_uid: story.uid });
+
+    const asBob = await read(draft.uid, asInvite(BOB, bobOnStory));
+    expect(asBob.status).toBe(200);
+    const doc = (await asBob.json()) as { role: string; format: string; folder: FolderWire };
+    expect(doc.role).toBe('collaborator');
+    expect(doc.format).toBe('asciidoc');
+    expect(doc.folder.documents.map((d) => d.uid)).toEqual([story.uid, draft.uid]);
+
+    // Its own links open nothing now, not even the document itself.
+    expect((await read(draft.uid, asInvite(ALICE, draft.admin_invite.token))).status).toBe(401);
+    expect((await read(draft.uid, asInvite(BOB, bobOnDraft))).status).toBe(401);
+
+    const threads = await call(`/api/documents/${draft.uid}/threads`, {
+      headers: asInvite(ALICE, story.admin_invite.token),
+    });
+    expect(JSON.stringify(await threads.json())).toContain('keep me');
+  });
+
+  test("a moved document takes the folder's password gate and drops its own", async () => {
+    const story = await createStory({ password_protected: true });
+    const draft = await createStory({ password_protected: true });
+    const res = await moveIn(
+      draft.uid,
+      draft.admin_invite.token,
+      story.uid,
+      story.admin_invite.token,
+    );
+    expect(res.status).toBe(200);
+
+    const admin = asInvite(ALICE, story.admin_invite.token);
+    expect((await read(draft.uid, admin)).status).toBe(401);
+    admin.set('cookie', await passwordSession(story.uid, story.password));
+    expect((await read(draft.uid, admin)).status).toBe(200);
+  });
+
+  test("a moved document's own group link and claimed sessions stop opening it", async () => {
+    const story = await createStory();
+    const draft = await createStory();
+    const group = await call(`/api/documents/${draft.uid}/invites`, {
+      method: 'POST',
+      headers: asInvite(ALICE, draft.admin_invite.token),
+      body: JSON.stringify({ kind: 'group', role: 'collaborator' }),
+    });
+    expect(group.status).toBe(201);
+    const groupToken = ((await group.json()) as { invite: { token: string } }).invite.token;
+    const claim = await call(`/api/documents/${draft.uid}/invites/${groupToken}/claim`, {
+      method: 'POST',
+      headers: headersFor(BOB),
+    });
+    expect(claim.status).toBe(201);
+    const cookie = (claim.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+    expect(cookie).toMatch(new RegExp(`^${INVITE_SESSION_COOKIE}=`));
+    expect((await read(draft.uid, headersFor(BOB, { cookie }))).status).toBe(200);
+
+    const res = await moveIn(
+      draft.uid,
+      draft.admin_invite.token,
+      story.uid,
+      story.admin_invite.token,
+    );
+    expect(res.status).toBe(200);
+
+    expect((await read(draft.uid, headersFor(BOB, { cookie }))).status).toBe(401);
+    const reclaim = await call(`/api/documents/${draft.uid}/invites/${groupToken}/claim`, {
+      method: 'POST',
+      headers: headersFor(BOB),
+    });
+    expect(reclaim.status).not.toBe(201);
+  });
+
+  test('moving a document in takes an admin link on both sides', async () => {
+    const story = await createStory();
+    const draft = await createStory();
+    const storyEditor = await invite(story, 'editor');
+    const draftEditor = await invite(draft, 'editor');
+
+    expect((await moveIn(draft.uid, draftEditor, story.uid, story.admin_invite.token)).status).toBe(
+      403,
+    );
+    expect((await moveIn(draft.uid, draft.admin_invite.token, story.uid, storyEditor)).status).toBe(
+      403,
+    );
+    // Another document's admin link is no admin link here.
+    expect(
+      (await moveIn(draft.uid, draft.admin_invite.token, story.uid, draft.admin_invite.token))
+        .status,
+    ).toBe(403);
+    expect((await read(draft.uid, asInvite(ALICE, draft.admin_invite.token))).status).toBe(200);
+  });
+
+  test('only a document that stands alone moves, and only into another folder', async () => {
+    const story = await createStory();
+    const outline = await addOutline(story);
+    const other = await createStory();
+    const token = story.admin_invite.token;
+
+    // Through a folder document lands in its main document's folder.
+    const draft = await createStory();
+    expect((await moveIn(draft.uid, draft.admin_invite.token, outline, token)).status).toBe(200);
+    expect((await moveIn(draft.uid, token, other.uid, other.admin_invite.token)).status).toBe(409);
+    // Without its admin link, nothing says the document is in a folder.
+    const anonymous = await call(`/api/documents/${draft.uid}/move-to-folder`, {
+      method: 'POST',
+      headers: headersFor(BOB),
+      body: JSON.stringify({ folder: other.uid, folder_admin_token: other.admin_invite.token }),
+    });
+    expect(anonymous.status).toBe(403);
+    expect(JSON.stringify(await anonymous.json())).not.toContain(story.uid);
+
+    // A main document would strand its folder.
+    expect((await moveIn(story.uid, token, other.uid, other.admin_invite.token)).status).toBe(409);
+    expect(
+      (await moveIn(other.uid, other.admin_invite.token, other.uid, other.admin_invite.token))
+        .status,
+    ).toBe(400);
+    expect((await moveIn(other.uid, other.admin_invite.token, 'missing', token)).status).toBe(404);
+    expect((await read(outline, asInvite(ALICE, token))).status).toBe(200);
+  });
+
+  test("keyrings keep a moved document with the folder's link, or let it go", async () => {
+    const story = await createStory();
+    const outline = await addOutline(story);
+    const aliceReader = await invite(story, 'reader');
+    const draft = await createStory();
+    const bobOnDraft = await invite(draft, 'reader');
+
+    async function ring(client: Client, docs: Array<[string, string]>): Promise<Headers> {
+      const res = await call('/api/keyrings', {
+        method: 'POST',
+        headers: headersFor(client),
+        body: JSON.stringify({ docs: [] }),
+      });
+      const { token } = (await res.json()) as { token: string };
+      const headers = headersFor(client, { [KEYRING_HEADER]: token });
+      for (const [uid, invite_token] of docs) {
+        const put = await call(`/api/keyrings/self/docs/${uid}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ invite_token }),
+        });
+        expect(put.status).toBe(200);
+      }
+      return headers;
+    }
+    // The weaker folder link comes first: the strongest one must win.
+    const alice = await ring(ALICE, [
+      [outline, aliceReader],
+      [story.uid, story.admin_invite.token],
+      [draft.uid, draft.admin_invite.token],
+    ]);
+    const bob = await ring(BOB, [[draft.uid, bobOnDraft]]);
+
+    const res = await moveIn(
+      draft.uid,
+      draft.admin_invite.token,
+      story.uid,
+      story.admin_invite.token,
+    );
+    expect(res.status).toBe(200);
+
+    type Pulled = { docs: Array<{ doc_uid: string; invite_token: string; role: string | null }> };
+    const alicePull = (await (
+      await call('/api/keyrings/self', { headers: alice })
+    ).json()) as Pulled;
+    expect(alicePull.docs.find((d) => d.doc_uid === draft.uid)).toMatchObject({
+      invite_token: story.admin_invite.token,
+      role: 'admin',
+    });
+    const bobPull = (await (await call('/api/keyrings/self', { headers: bob })).json()) as Pulled;
+    expect(bobPull.docs).toHaveLength(0);
+  });
+
   test("a keyring takes a folder document with the main document's token", async () => {
     const story = await createStory({ password_protected: true });
     const outline = await addOutline(

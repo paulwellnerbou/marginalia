@@ -227,6 +227,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
   r.post('/:uid/copy', async (c) => copyDocument(c, deps));
+  r.post('/:uid/move-to-folder', async (c) => moveToFolder(c, deps));
   r.delete('/:uid', async (c) => deleteDocument(c, deps));
   r.get('/:uid/history', async (c) => getHistory(c, deps));
   r.get('/:uid/history/:oid/diff', async (c) => getHistoryDiff(c, deps));
@@ -439,6 +440,97 @@ async function createFolderDocument(
     },
     201,
   );
+}
+
+// --- POST /api/documents/:uid/move-to-folder -------------------------
+
+/**
+ * Move a standalone document into the folder `body.folder` belongs to, so
+ * the links people already hold for that folder open it too. Its text,
+ * history and discussion stay; its own access does not: a folder document
+ * has none, and leaving its invites behind inert would let them come back
+ * to life if it ever left the folder again.
+ *
+ * Widening who can open a document is an admin's call on both sides, so
+ * the header carries this document's admin link and `folder_admin_token`
+ * the folder's. An admin link already reveals the password, so neither
+ * side needs a password session on top.
+ */
+async function moveToFolder(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  const body = (await safeJson(c)) ?? {};
+  const folderRef = typeof body.folder === 'string' ? body.folder : '';
+  const folderToken = typeof body.folder_admin_token === 'string' ? body.folder_admin_token : '';
+
+  // Admin first: the answer below says whether the document is in a folder.
+  const ownGate = accessDocument(db, doc) ?? doc;
+  if (!requireAdminInvite(c, db, ownGate.uid)) return c.json({ error: 'forbidden' }, 403);
+  if (doc.folder_uid) {
+    return c.json({ error: 'already-in-folder', folder_uid: doc.folder_uid }, 409);
+  }
+
+  const target = loadDoc(db, folderRef);
+  const main = target ? accessDocument(db, target) : null;
+  if (!main) return c.json({ error: 'folder-not-found' }, 404);
+  if (main.uid === doc.uid) return c.json({ error: 'same-document' }, 400);
+  if (!adminInvite(db, folderToken, main.uid)) return c.json({ error: 'forbidden' }, 403);
+
+  const result = db.transaction(() => {
+    // Everything checked above, again, where nothing can change it before
+    // the writes: either document, and either admin link (rotated, say).
+    const fresh = loadDoc(db, doc.uid);
+    if (!fresh || fresh.folder_uid) return 'already-in-folder' as const;
+    if (folderMembers(db, fresh).length > 0) return 'has-folder-documents' as const;
+    const gate = loadDoc(db, main.uid);
+    if (!gate || gate.folder_uid) return 'folder-not-found' as const;
+    if (!requireAdminInvite(c, db, fresh.uid) || !adminInvite(db, folderToken, gate.uid)) {
+      return 'forbidden' as const;
+    }
+
+    // Each ring that can open the folder keeps the document with the
+    // strongest folder link it holds; a ring that only held this
+    // document's links loses it, as those open nothing any more. A group
+    // link is no credential (authorize ignores it), so it never counts.
+    db.prepare(
+      `UPDATE keyring_docs
+          SET invite_token = (
+            SELECT k2.invite_token FROM keyring_docs k2
+              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?1 AND i.kind <> 'group'
+             WHERE k2.keyring_token = keyring_docs.keyring_token
+             ORDER BY CASE i.role WHEN 'admin' THEN 4 WHEN 'editor' THEN 3
+                                  WHEN 'collaborator' THEN 2 ELSE 1 END DESC
+             LIMIT 1)
+        WHERE doc_uid = ?2
+          AND EXISTS (
+            SELECT 1 FROM keyring_docs k2
+              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?1 AND i.kind <> 'group'
+             WHERE k2.keyring_token = keyring_docs.keyring_token)`,
+    ).run(main.uid, doc.uid);
+    db.prepare(
+      `DELETE FROM keyring_docs
+        WHERE doc_uid = ?
+          AND invite_token NOT IN (SELECT token FROM invites WHERE doc_uid = ?)`,
+    ).run(doc.uid, main.uid);
+
+    dropOwnAccess(db, doc.uid);
+    db.prepare(
+      `UPDATE documents
+          SET folder_uid = ?, password_hash = NULL, password_recovery_ciphertext = NULL,
+              password_recovery_iv = NULL, invite_only = 1, updated_at = ?
+        WHERE uid = ?`,
+    ).run(main.uid, Date.now(), doc.uid);
+    // The folder's people, so @mentions resolve here before they visit.
+    copyDocUsers(db, main.uid, doc.uid);
+    return 'ok' as const;
+  })();
+  if (result !== 'ok') {
+    const status = result === 'folder-not-found' ? 404 : result === 'forbidden' ? 403 : 409;
+    return c.json({ error: result }, status);
+  }
+
+  return c.json({ uid: doc.uid, folder_uid: main.uid });
 }
 
 // --- POST /api/documents/:uid/copy -----------------------------------
@@ -1247,17 +1339,13 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   db.prepare('DELETE FROM comment_reactions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM thread_bookmarks WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
-  db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
-  deleteDocNameHistory(db, doc.uid);
-  db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+  dropOwnAccess(db, doc.uid);
   db.prepare('DELETE FROM document_assets WHERE doc_uid = ?').run(doc.uid);
   // Every ring's copy of an invite token for this doc, across all the
   // owner's devices and anyone else they shared a token with. Reads
   // already drop rows whose document is gone, so this is about not
   // leaving dead credentials in the store, not about correctness.
   db.prepare('DELETE FROM keyring_docs WHERE doc_uid = ?').run(doc.uid);
-  // The invites these pointed at went with the doc's invites above.
-  db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM asset_upload_tickets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM source_upload_tickets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
@@ -3829,8 +3917,32 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
 
 function requireAdminInvite(c: Context, db: Database, docUid: string): InviteRow | null {
   const invite = readInvite(db, c.req.raw.headers, docUid);
-  if (!invite || invite.kind !== 'admin' || invite.role !== 'admin') return null;
-  return invite;
+  return isAdminInvite(invite) ? invite : null;
+}
+
+/** The admin link `token` of `docUid`, for one that arrives other than in the header. */
+function adminInvite(db: Database, token: string, docUid: string): InviteRow | null {
+  const invite = db
+    .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+    .get(token, docUid) as InviteRow | null;
+  return isAdminInvite(invite) ? invite : null;
+}
+
+function isAdminInvite(invite: InviteRow | null): invite is InviteRow {
+  return invite?.kind === 'admin' && invite.role === 'admin';
+}
+
+/**
+ * Every way into `docUid` that is its own: invites (and the upload URLs
+ * minted through them), personal-link name history, password and invite
+ * sessions, agent-key invites. A document that is deleted or joins a
+ * folder loses all of them, and new per-document access belongs here.
+ */
+function dropOwnAccess(db: Database, docUid: string): void {
+  db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(docUid);
+  deleteDocNameHistory(db, docUid);
+  db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(docUid);
+  db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(docUid);
 }
 
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {

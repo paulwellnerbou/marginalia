@@ -25,14 +25,11 @@ import {
   updateInvite,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
-import { replaceFolderToken } from '../lib/folder.js';
+import { replaceFolderToken, syncDocToken } from '../lib/folder.js';
 import { linkWithFullView } from '../lib/full-view.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
-import { updateOpenTabToken } from '../lib/open-tabs.js';
-import { updateRecentDocToken } from '../lib/recent-docs.js';
 import { type GrantableRole, roleLabel, roleSummary } from '../lib/roles.js';
 import {
   AccessCreateForm,
@@ -355,11 +352,7 @@ export function InvitesPanel({
       // syncs only to this browser locks the rest out of their own
       // document, which is a worse outcome than the leak being rotated.
       const rotated = [uid, ...replaceFolderToken(sharedWith, oldToken, admin_invite.token)];
-      for (const each of rotated) {
-        keyringPushDoc(each, admin_invite.token);
-        updateRecentDocToken(each, admin_invite.token);
-        updateOpenTabToken(each, admin_invite.token);
-      }
+      for (const each of rotated) syncDocToken(each, admin_invite.token);
       refreshRequestRef.current += 1;
       setInvites((current) =>
         current
