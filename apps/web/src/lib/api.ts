@@ -2478,13 +2478,17 @@ export function repairEditProposalAnchor(
   });
 }
 
+/**
+ * Resolve or reopen a thread. Reopening a rejected proposal can reopen
+ * comments it answers (see `reopened_answered_thread_ids`).
+ */
 export async function resolveThread(
   uid: string,
   threadId: string,
   resolved: boolean,
   identity: Identity,
   body?: string,
-): Promise<Thread> {
+): Promise<{ thread: Thread; reopenedAnsweredThreadIds: string[] }> {
   const replyBody = body?.trim();
   const res = await request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}/respond`,
@@ -2499,5 +2503,8 @@ export async function resolveThread(
     },
   );
   rememberThread(uid, res.thread);
-  return res.thread;
+  return {
+    thread: res.thread,
+    reopenedAnsweredThreadIds: res.reopened_answered_thread_ids ?? [],
+  };
 }

@@ -27,7 +27,7 @@ import { DiffDialog } from '../DiffDialog.js';
 import { useBookmarkControls } from './bookmarkedThreads.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
-import type { ThreadActionResult } from './inlineUtils.js';
+import { cardCanReopen, type ThreadActionResult } from './inlineUtils.js';
 import {
   proposalDiffNeedsRefresh,
   readCachedProposalDiff,
@@ -288,7 +288,7 @@ export function InlineThreadCard({
     thread.capabilities.resolve_conflict &&
     (isConflict || resolvedDiff?.mergeable === 'conflict');
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
-  const canReopen = !proposal && isResolved && thread.capabilities.reopen;
+  const canReopen = cardCanReopen(thread);
   const canCreateProposal =
     !proposal &&
     !isResolved &&
@@ -307,7 +307,7 @@ export function InlineThreadCard({
   // proposal's rationale may already be quoted in a history entry (for
   // a fast-forward accept it's literally in the commit message — see
   // GitStore.createProposalBranch — though a 3-way-merge accept doesn't
-  // carry it there), and a rejected one has no undo. Deletes follow the
+  // carry it there), and a rejected one must be reopened first. Deletes follow the
   // server capability (admin-only once accepted); the history entry
   // keeps its attribution even after the thread is deleted.
   const openerNode: Comment = useMemo(() => {
@@ -942,7 +942,8 @@ export function InlineThreadCard({
             ) : undefined
           }
           actions={
-            status === 'open' && (canAccept || canReject || canUpdate || canResolveConflict) ? (
+            (status === 'open' && (canAccept || canReject || canUpdate || canResolveConflict)) ||
+            canReopen ? (
               <>
                 {canResolveConflict && (
                   <button
@@ -998,6 +999,20 @@ export function InlineThreadCard({
                     aria-label="Reject"
                   >
                     {workflowContent('Reject', isRunning('reject', 'dialog'))}
+                  </button>
+                )}
+                {canReopen && (
+                  <button
+                    type="button"
+                    className="ic-btn ic-btn-ghost"
+                    // Stays open: the reopened proposal offers Accept here next.
+                    onClick={() => void runWorkflow('reopen', 'dialog')}
+                    disabled={busy !== null && !isRunning('reopen', 'dialog')}
+                    aria-busy={isRunning('reopen', 'dialog')}
+                    aria-label="Reopen"
+                    title="Put this proposal back up for a decision"
+                  >
+                    {workflowContent('Reopen', isRunning('reopen', 'dialog'))}
                   </button>
                 )}
               </>

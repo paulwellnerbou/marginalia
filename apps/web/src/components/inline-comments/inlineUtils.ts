@@ -1,4 +1,4 @@
-import type { Thread } from '../../lib/api.js';
+import { isProposal, proposalStatus, type Thread } from '../../lib/api.js';
 /** Duration of the ic-flash CSS keyframe in ms. Must stay in sync with `app.css`. */
 export const COMMENT_FLASH_MS = 760;
 
@@ -11,6 +11,16 @@ export const COMMENT_FLASH_MS = 760;
  * is gone in seconds and says nothing about *which* proposal failed.
  */
 export type ThreadActionResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * Whether a card offers Reopen. The server also allows reopening an
+ * accepted proposal, but that reverts the accept and rewrites the
+ * document, so it is left to the history panel; a card only un-rejects.
+ */
+export function cardCanReopen(thread: Thread): boolean {
+  if (thread.state !== 'resolved' || !thread.capabilities.reopen) return false;
+  return !isProposal(thread) || proposalStatus(thread) === 'rejected';
+}
 
 export function inlineAvatarInitials(name: string): string {
   const trimmed = name.trim();
