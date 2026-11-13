@@ -340,7 +340,6 @@ async function createThread(c: Context, deps: AppDeps) {
   }
   const bookmark = body.bookmark === true;
   if (bookmark && proposal) return c.json({ error: 'bookmark-proposal-forbidden' }, 400);
-  if (bookmark && rootBody.body) return c.json({ error: 'bookmark-body-forbidden' }, 400);
   // A bookmark is a place a reader marked, not something they said, and it
   // is private whatever the request asked for — nobody else's pane, feed or
   // realtime channel has any use for it.
@@ -352,6 +351,7 @@ async function createThread(c: Context, deps: AppDeps) {
 
   if (!proposal) {
     if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
+    // A bookmark's body is its optional label.
     if (!bookmark && !rootBody.body) return c.json({ error: 'body-required' }, 400);
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
@@ -821,7 +821,8 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  const next = parseThreadRootBody(body.body, isProposalRow(row));
+  // A bookmark's label can be cleared, like a proposal's rationale.
+  const next = parseThreadRootBody(body.body, isProposalRow(row) || row.is_bookmark === 1);
   if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
   const parsedUpdate = asProposalUpdate(body.proposal);
   if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
@@ -834,9 +835,8 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (nextHidden !== undefined && isProposalRow(row)) {
     return c.json({ error: 'hidden-proposal-forbidden' }, 400);
   }
-  if (row.is_bookmark === 1) {
-    if (nextHidden !== undefined) return c.json({ error: 'bookmark-always-hidden' }, 400);
-    if (next.body) return c.json({ error: 'bookmark-body-forbidden' }, 400);
+  if (row.is_bookmark === 1 && nextHidden !== undefined) {
+    return c.json({ error: 'bookmark-always-hidden' }, 400);
   }
   if (nextHidden !== undefined && !isAuthor) return c.json({ error: 'forbidden' }, 403);
   if (!(nextHidden ?? row.is_hidden === 1) && needsName(decision)) return nameRequired(c);
@@ -3031,7 +3031,7 @@ async function toThreadWire(
           display_name: row.author_display_name,
         },
         capabilities: {
-          edit: canRootEdit && row.is_bookmark === 0,
+          edit: canRootEdit,
           delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
           hide: !proposal && row.is_bookmark === 0 && isRootAuthor,
           react: canReply,

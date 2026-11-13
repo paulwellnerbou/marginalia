@@ -554,6 +554,7 @@ export function InlineCommentsList({
           flashPhase={flash?.id === thread.id ? flash.phase : null}
           onJump={onJump}
           onRemove={onDeleteThread}
+          onEditLabel={onEdit}
         />
       );
     }

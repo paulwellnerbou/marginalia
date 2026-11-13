@@ -2442,9 +2442,8 @@ async function importDocument(c: Context, deps: AppDeps) {
       typeof row.parent_proposal_id === 'string' ? row.parent_proposal_id : null;
     if (parentOldId && parentProposalOldId) continue;
     const isRootComment = !parentOldId && !parentProposalOldId;
-    // Only a root can be a bookmark, and a bookmark is always private, with
-    // no text and no proposal — a hand-edited bundle doesn't get to say
-    // otherwise.
+    // Only a root can be a bookmark, and a bookmark is always private —
+    // a hand-edited bundle doesn't get to say otherwise.
     const isBookmark = isRootComment && row.is_bookmark === true;
     const newParentId = parentOldId ? (idMap.get(parentOldId) ?? null) : null;
     const newParentProposalId = parentProposalOldId
@@ -2466,7 +2465,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       normalizeNumberArrayJson(row.anchor_section_index_path),
       row.author_client_id,
       row.author_display_name,
-      isBookmark ? '' : row.body,
+      row.body,
       row.is_hidden === true || isBookmark ? 1 : 0,
       isBookmark ? 1 : 0,
       normalizeImportedLinkStatus(

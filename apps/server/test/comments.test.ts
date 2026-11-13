@@ -346,7 +346,7 @@ describe('threads API', () => {
     expect(await list(uid, ALICE)).toHaveLength(0);
   });
 
-  test('a bookmark takes no text and cannot be a proposal, and a comment still needs a body', async () => {
+  test('a bookmark may carry a label but cannot be a proposal, and a comment still needs a body', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
     const post = (payload: Record<string, unknown>) =>
@@ -364,9 +364,12 @@ describe('threads API', () => {
       'bookmark-proposal-forbidden',
     );
 
-    const withText = await post({ bookmark: true, body: 'A label' });
-    expect(withText.status).toBe(400);
-    expect(((await withText.json()) as { error: string }).error).toBe('bookmark-body-forbidden');
+    const labelled = await post({ bookmark: true, body: '  Start here  ' });
+    expect(labelled.status).toBe(201);
+    const { thread: labelledThread } = (await labelled.json()) as { thread: ThreadShape };
+    expect(labelledThread.bookmark).toBe(true);
+    expect(labelledThread.comments[0].body).toBe('Start here');
+    expect(labelledThread.comments[0].hidden).toBe(true);
 
     const notBoolean = await post({ bookmark: 'yes' });
     expect(notBoolean.status).toBe(400);
@@ -380,7 +383,7 @@ describe('threads API', () => {
     expect(((await comment.json()) as { thread: ThreadShape }).thread.bookmark).toBe(false);
   });
 
-  test('editing a bookmark cannot make it public or give it text', async () => {
+  test('editing a bookmark sets and clears its label but cannot make it public', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
     const created = await app.hono.fetch(
@@ -404,9 +407,32 @@ describe('threads API', () => {
     expect(unhide.status).toBe(400);
     expect(((await unhide.json()) as { error: string }).error).toBe('bookmark-always-hidden');
 
-    const label = await patch({ body: 'A label' });
-    expect(label.status).toBe(400);
-    expect(((await label.json()) as { error: string }).error).toBe('bookmark-body-forbidden');
+    expect(thread.comments[0].capabilities.edit).toBe(true);
+    const label = await patch({ body: 'Chapter two starts here' });
+    expect(label.status).toBe(200);
+    const labelled = ((await label.json()) as { thread: ThreadShape }).thread;
+    expect(labelled.bookmark).toBe(true);
+    expect(labelled.comments[0].body).toBe('Chapter two starts here');
+    expect(labelled.comments[0].hidden).toBe(true);
+    expect(labelled.comments[0].capabilities.hide).toBe(false);
+
+    const cleared = await patch({ body: '' });
+    expect(cleared.status).toBe(200);
+    expect(((await cleared.json()) as { thread: ThreadShape }).thread.comments[0].body).toBe('');
+
+    await patch({ body: 'Again' });
+    const nulled = await patch({ body: null });
+    expect(nulled.status).toBe(200);
+    expect(((await nulled.json()) as { thread: ThreadShape }).thread.comments[0].body).toBe('');
+
+    const bobLabel = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}`, {
+        method: 'PATCH',
+        headers: asAdmin(BOB),
+        body: JSON.stringify({ body: 'Not yours' }),
+      }),
+    );
+    expect(bobLabel.status).toBe(404);
   });
 
   test('a reader cannot bookmark, for the same reason they cannot comment', async () => {
@@ -513,7 +539,8 @@ describe('threads API', () => {
     expect(thread.capabilities.reply).toBe(false);
     expect(thread.capabilities.resolve).toBe(false);
     expect(thread.comments[0].capabilities).toMatchObject({
-      edit: false,
+      // Editable for its label.
+      edit: true,
       delete: true,
       react: false,
     });
@@ -2709,14 +2736,18 @@ describe('threads API', () => {
     return { bundle, serialized, imported, headers };
   }
 
-  test('a bookmark comes back from an export and import as a private bookmark', async () => {
+  test('a bookmark comes back from an export and import as a private bookmark, label and all', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
     const created = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: asAdmin(),
-        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          bookmark: true,
+          body: 'Read first',
+        }),
       }),
     );
     expect(created.status).toBe(201);
@@ -2728,12 +2759,13 @@ describe('threads API', () => {
       body?: string;
       edit_proposal?: unknown;
     }>;
-    expect(rows.map((r) => [r.is_bookmark, r.is_hidden])).toEqual([[true, true]]);
+    expect(rows.map((r) => [r.is_bookmark, r.is_hidden, r.body])).toEqual([
+      [true, true, 'Read first'],
+    ]);
 
     // A hand-edited bundle cannot turn a bookmark into something else: the
-    // flag brings its privacy with it, and leaves text and proposal behind.
+    // flag brings its privacy with it, and leaves any proposal behind.
     rows[0]!.is_hidden = false;
-    rows[0]!.body = 'Smuggled text';
     rows[0]!.edit_proposal = { proposed_text: '# Other title', status: 'open' };
     const importRes = await app.hono.fetch(
       new Request('http://test/api/documents/import', {
@@ -2752,7 +2784,7 @@ describe('threads API', () => {
     const { threads } = (await listRes.json()) as { threads: ThreadShape[] };
     expect(
       threads.map((t) => [t.bookmark, t.comments[0].hidden, t.comments[0].body, t.proposal]),
-    ).toEqual([[true, true, '', null]]);
+    ).toEqual([[true, true, 'Read first', null]]);
   });
 
   /**
