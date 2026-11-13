@@ -36,16 +36,16 @@
   --md-color-border: #dcd8ce;
   --md-color-code-bg: #ffffff;
   --md-color-code-fg: #23221f;
-  --md-color-quote-bar: #d6ec4e;
+  --md-color-accent-bright: #d6ec4e;
+  --md-color-quote-bar: var(--md-color-accent-bright);
   /* Same as the card surface: rows are told apart by their rules, not by striping. */
   --md-color-table-stripe: #ffffff;
-  --md-color-selection-bg: color-mix(in srgb, #d6ec4e 60%, transparent);
+  --md-color-selection-bg: color-mix(in srgb, var(--md-color-accent-bright) 60%, transparent);
   --md-color-block-bg: var(--report-surface);
 
   --report-surface: #ffffff;
   --report-bar: #2b2b2b;
-  --report-highlight: #d6ec4e;
-  --report-line: #c3ab7c;
+  --report-line: var(--md-color-ornament, #c3ab7c);
   --report-ok: #2f6b3a;
   --report-warn: #8a5a00;
   --report-crit: #9b2c22;
@@ -163,7 +163,7 @@
   text-decoration-color: var(--md-color-accent-muted);
 }
 .marginalia a:hover {
-  text-decoration-color: var(--report-highlight);
+  text-decoration-color: var(--md-color-accent);
   text-decoration-thickness: 2px;
 }
 .marginalia :not(pre) > code {
@@ -297,12 +297,13 @@
   --md-color-border: #3a3934;
   --md-color-code-bg: #242421;
   --md-color-code-fg: #ecebe6;
-  --md-color-quote-bar: #d6ec4e;
+  --md-color-accent-bright: #d6ec4e;
+  --md-color-quote-bar: var(--md-color-accent-bright);
   --md-color-table-stripe: #242421;
-  --md-color-selection-bg: color-mix(in srgb, #d6ec4e 32%, transparent);
+  --md-color-selection-bg: color-mix(in srgb, var(--md-color-accent-bright) 32%, transparent);
   --report-surface: #242421;
   --report-bar: #ecebe6;
-  --report-line: #b49b6a;
+  --report-line: var(--md-color-ornament, #b49b6a);
   --report-ok: #9fd3a6;
   --report-warn: #f0c46a;
   --report-crit: #f2a197;
@@ -322,12 +323,13 @@
     --md-color-border: #3a3934;
     --md-color-code-bg: #242421;
     --md-color-code-fg: #ecebe6;
-    --md-color-quote-bar: #d6ec4e;
+    --md-color-accent-bright: #d6ec4e;
+    --md-color-quote-bar: var(--md-color-accent-bright);
     --md-color-table-stripe: #242421;
-    --md-color-selection-bg: color-mix(in srgb, #d6ec4e 32%, transparent);
+    --md-color-selection-bg: color-mix(in srgb, var(--md-color-accent-bright) 32%, transparent);
     --report-surface: #242421;
     --report-bar: #ecebe6;
-    --report-line: #b49b6a;
+    --report-line: var(--md-color-ornament, #b49b6a);
     --report-ok: #9fd3a6;
     --report-warn: #f0c46a;
     --report-crit: #f2a197;

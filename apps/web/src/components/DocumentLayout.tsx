@@ -91,6 +91,7 @@ import {
 } from '../lib/chapter-reading.js';
 import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
+import { useDocAccentDefault } from '../lib/doc-accent.js';
 import { useDocColorStyle } from '../lib/doc-colors.js';
 import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
@@ -155,6 +156,7 @@ import {
 } from '../lib/ui-scale.js';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { usePagedReading } from '../lib/usePagedReading.js';
+import { AccentControl } from './AccentControl.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
@@ -1228,6 +1230,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   /* `100%` rather than `none`: the inline comments column subtracts this
      from the row width. */
   const readingWidth = isHtml ? (htmlWidth ? `${htmlWidth}px` : '100%') : `${maxWidth}ch`;
+  useDocAccentDefault(doc.uid, doc.default_accent);
   const docColorOverride = useDocColorStyle(doc.uid, doc.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc.format, theme));
@@ -3491,6 +3494,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
             paperRef={docScrollRef}
             inkRef={docRef}
             theme={theme}
+          />
+          <AccentControl
+            doc={doc}
+            inkRef={docRef}
+            theme={theme}
+            onDocSettingsChanged={onDocSettingsChanged}
           />
         </>
       )}

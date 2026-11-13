@@ -34,12 +34,24 @@ re-rendering the document.
 | `--md-color-bg` | Page background |
 | `--md-color-accent` | Link / accent color |
 | `--md-color-accent-muted` | Link underline / subtle accent |
+| `--md-color-accent-bright` | The accent at full strength, for bars, fills and markers (optional; only the report theme reads it) |
+| `--md-color-ornament` | Rules and ornaments in a picked accent. Never set by a theme, only by a pick, so read it as `var(--md-color-ornament, <own colour>)` (the report theme's guide line and list markers) |
 | `--md-color-border` | Separators, horizontal rules, table borders |
 | `--md-color-code-bg` | Inline code + code block background |
 | `--md-color-code-fg` | Inline code + code block foreground |
 | `--md-color-quote-bar` | Blockquote left border |
 | `--md-color-table-stripe` | Zebra-stripe color on table rows |
 | `--md-color-selection-bg` | `::selection` background |
+
+## Picked accent
+
+A reader or document admin can pick an accent color in the viewer. The
+viewer sets `--md-color-accent`, `--md-color-accent-muted`,
+`--md-color-accent-bright` and `--md-color-ornament` inline on the themed elements, with shades
+from `accentCssVars` in [`src/accent.ts`](./src/accent.ts): darkened for a
+light page, lifted for a dark one, the muted shade translucent. A theme
+that should follow the pick derives its accent-coloured rules from these
+three variables rather than from literal colours.
 
 ## Stable HTML hooks
 

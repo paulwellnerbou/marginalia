@@ -27,6 +27,7 @@ const PREFS = [
   'commentsDisplayMode',
   'rightTab',
   'docColors',
+  'accent',
   'threadListSort',
   'threadListStatus',
   'threadListKind',

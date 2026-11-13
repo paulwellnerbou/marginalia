@@ -15,6 +15,7 @@ import {
   downloadDocumentSourceWithAcceptedProposals,
   uploadDocumentCover,
 } from '../lib/api.js';
+import { useDocAccent } from '../lib/doc-accent.js';
 import { FORMAT_INFO } from '../lib/format-info.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -108,6 +109,8 @@ export function useDocumentDownloads({
   /** Where the EPUB dialog returns focus: whichever menu opened it. */
   returnFocus: RefObject<HTMLElement | null>;
 }): DocumentDownloads {
+  // The PDF follows the accent on screen, like the theme.
+  const { accent } = useDocAccent(doc.uid);
   const [busy, setBusy] = useState<
     | null
     | 'source'
@@ -386,7 +389,7 @@ export function useDocumentDownloads({
   async function downloadPdf(): Promise<void> {
     setBusy('pdf');
     try {
-      const { blob, filename } = await downloadDocumentPdf(doc.uid, theme);
+      const { blob, filename } = await downloadDocumentPdf(doc.uid, theme, accent);
       downloadBlob(blob, filename);
     } catch (err) {
       reportError('DownloadMenu.pdf', err, { uid: doc.uid });

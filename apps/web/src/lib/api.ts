@@ -120,6 +120,7 @@ export interface DocumentBundle {
     /** @deprecated Accepted for back-compat with old bundles; ignored. */
     editable_by_anyone?: boolean;
     default_theme: string;
+    default_accent?: string | null;
     /** Bundle v4+ carries the per-document mermaid renderer override. */
     mermaid_renderer?: MermaidRenderer | null;
   };
@@ -174,6 +175,8 @@ export interface Document {
   cover: DocumentCover | null;
   format: DocumentFormat;
   default_theme: string;
+  /** `#rrggbb` every reader sees unless they pick their own; null keeps the theme's. */
+  default_accent: string | null;
   /**
    * Per-document override for the mermaid renderer used by DOCX/PDF
    * exports. `null` means "use server default" (typically `'mmdr'`).
@@ -939,9 +942,14 @@ function readSkippedProposalCount(res: Response): number {
 export async function downloadDocumentPdf(
   uid: string,
   theme?: string,
+  /** A hex, `null` for the theme's own, or omitted for the document's default. */
+  accent?: string | null,
 ): Promise<{ blob: Blob; filename: string }> {
-  const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
-  const res = await requestBinary(`/api/documents/${encodeURIComponent(uid)}/export.pdf${params}`, {
+  const params = new URLSearchParams();
+  if (theme) params.set('theme', theme);
+  if (accent !== undefined) params.set('accent', accent ?? 'none');
+  const query = params.size > 0 ? `?${params}` : '';
+  const res = await requestBinary(`/api/documents/${encodeURIComponent(uid)}/export.pdf${query}`, {
     method: 'GET',
     docUid: uid,
   });
@@ -1211,6 +1219,8 @@ export interface DocumentSettingsPatch {
   /** Rename the document. `null` clears it (→ derive from content). */
   name?: string | null;
   default_theme?: string;
+  /** `#rrggbb`, or `null` for the theme's own accent. */
+  default_accent?: string | null;
   /**
    * Per-document mermaid renderer override. Pass `null` to clear the
    * override and fall back to the server default. Anything outside
@@ -1224,6 +1234,7 @@ export interface DocumentSettingsPatch {
 export interface DocumentSettingsResponse {
   name: string | null;
   default_theme: string;
+  default_accent: string | null;
   mermaid_renderer: MermaidRenderer | null;
   password_protected: boolean;
   invite_only: boolean;

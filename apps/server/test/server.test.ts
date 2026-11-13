@@ -3180,6 +3180,42 @@ describe('documents API', () => {
     expect(docJson.mermaid_renderer).toBeNull(); // last patch was a clear
   });
 
+  test('PATCH settings: default_accent takes #rrggbb or null, rejects anything else', async () => {
+    const created = await upload(CLIENT_A);
+    const patch = (body: unknown) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/settings`, {
+          method: 'PATCH',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify(body),
+        }),
+      );
+    const readAccent = async () => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        }),
+      );
+      return ((await res.json()) as { default_accent: string | null }).default_accent;
+    };
+
+    expect(await readAccent()).toBeNull();
+
+    const set = await patch({ default_accent: '#D6EC4E' });
+    expect(set.status).toBe(200);
+    expect(((await set.json()) as { default_accent: string }).default_accent).toBe('#d6ec4e');
+    expect(await readAccent()).toBe('#d6ec4e');
+
+    const bad = await patch({ default_accent: 'lime' });
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: 'invalid-accent' });
+    expect(await readAccent()).toBe('#d6ec4e');
+
+    const cleared = await patch({ default_accent: null });
+    expect(cleared.status).toBe(200);
+    expect(await readAccent()).toBeNull();
+  });
+
   test('password auth supports session-only cookies and explicit logout', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret',

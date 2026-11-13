@@ -75,7 +75,8 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
             label={label}
             ariaLabel={`${label} color (${mode} mode)`}
             value={value}
-            overridden={!!override}
+            inherited={override ? undefined : "The theme's color"}
+            canReset={!!override}
             resetLabel={`Reset ${noun} to the theme's`}
             onChange={(next) => setDocColor(docUid, mode, role, next)}
             onReset={() => setDocColor(docUid, mode, role, null)}
@@ -86,11 +87,13 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
   );
 }
 
-function ColorRow({
+/** One row of the display grid: a native color input, its hex, and a reset. */
+export function ColorRow({
   label,
   ariaLabel,
   value,
-  overridden,
+  inherited,
+  canReset,
   resetLabel,
   onChange,
   onReset,
@@ -98,7 +101,9 @@ function ColorRow({
   label: string;
   ariaLabel: string;
   value: string;
-  overridden: boolean;
+  /** Where the value comes from when it is not the reader's own pick; dims the hex. */
+  inherited?: string | undefined;
+  canReset: boolean;
   resetLabel: string;
   onChange: (hex: string) => void;
   onReset: () => void;
@@ -139,6 +144,7 @@ function ColorRow({
   );
 
   const shown = draft ?? value;
+  const own = !inherited || draft !== null;
 
   return (
     <>
@@ -154,8 +160,8 @@ function ColorRow({
           onChange={(e) => schedule(e.currentTarget.value)}
         />
         <span
-          className={`doc-color-value${overridden || draft ? '' : ' doc-color-value-theme'}`}
-          title={overridden || draft ? undefined : "The theme's color"}
+          className={`doc-color-value${own ? '' : ' doc-color-value-theme'}`}
+          title={own ? undefined : inherited}
         >
           {shown}
         </span>
@@ -166,7 +172,7 @@ function ColorRow({
             color="gray"
             className="doc-stepper-reset"
             aria-label={resetLabel}
-            disabled={!overridden}
+            disabled={!canReset}
             onClick={onReset}
           >
             <ResetIcon />

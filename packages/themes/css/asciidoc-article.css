@@ -111,7 +111,7 @@
 
 .marginalia a:hover,
 .marginalia a:focus {
-  color: var(--md-color-accent-muted);
+  color: color-mix(in oklab, var(--md-color-accent) 75%, var(--md-color-fg));
 }
 
 .marginalia :is(h1, h2, h3, h4, h5, h6) {

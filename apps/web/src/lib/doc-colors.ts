@@ -1,6 +1,8 @@
+import { accentCssVars } from '@marginalia/themes/accent';
 import { type CSSProperties, useMemo, useSyncExternalStore } from 'react';
 import type { DocumentFormat } from './api.js';
 import { useAppearance } from './appearance.js';
+import { useDocAccent } from './doc-accent.js';
 import { docViewUidOf, readDocViewPref, writeDocViewPref } from './doc-view-prefs.js';
 
 /**
@@ -137,9 +139,13 @@ export function useDocColors(docUid: string | undefined): {
  * redeclares the theme's colors, so an override set only on an ancestor
  * would be shadowed one level down.
  */
-export function docColorStyle(colors: DocColors): CSSProperties | undefined {
-  if (!colors.bg && !colors.fg) return undefined;
+export function docColorStyle(
+  colors: DocColors,
+  accent?: { hex: string; mode: DocColorMode },
+): CSSProperties | undefined {
+  if (!colors.bg && !colors.fg && !accent) return undefined;
   return {
+    ...(accent ? accentCssVars(accent.hex, accent.mode) : {}),
     ...(colors.bg ? { ['--md-color-bg' as string]: colors.bg } : {}),
     ...(colors.fg ? { ['--md-color-fg' as string]: colors.fg } : {}),
   };
@@ -147,20 +153,24 @@ export function docColorStyle(colors: DocColors): CSSProperties | undefined {
 
 /**
  * The style every rendering of a document carries, so previews match the
- * reader's paper. HTML pages bring their own look and get none.
+ * reader's paper and accent. HTML pages bring their own look and get none.
  */
 export function useDocColorStyle(
   docUid: string | undefined,
   format: DocumentFormat | undefined,
 ): CSSProperties | undefined {
-  const { colors } = useDocColors(docUid);
+  const { mode, colors } = useDocColors(docUid);
+  const { accent } = useDocAccent(docUid);
   const { bg, fg } = colors;
   return useMemo(
     () =>
       format === 'html'
         ? undefined
-        : docColorStyle({ ...(bg ? { bg } : {}), ...(fg ? { fg } : {}) }),
-    [format, bg, fg],
+        : docColorStyle(
+            { ...(bg ? { bg } : {}), ...(fg ? { fg } : {}) },
+            accent ? { hex: accent, mode } : undefined,
+          ),
+    [format, bg, fg, accent, mode],
   );
 }
 
