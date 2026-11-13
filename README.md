@@ -671,6 +671,19 @@ session covers the folder too. That is the difference from **Copy with
 access**, which re-mints links nobody holds yet: a folder shares the ones
 that already exist.
 
+A document that already exists can join a folder too, keeping its text,
+history and discussion: `POST /api/documents/:uid/move-to-folder` with
+`folder` naming any document of the folder. Widening who can open it is
+an admin's call on both sides, so the request carries the document's
+admin link and `folder_admin_token` the folder's. Its own invites,
+sessions and password are deleted rather than left inert, so they cannot
+come back to life later, and each keyring that also holds a link to the
+folder keeps the document with that link instead; one that held only the
+document's own links loses it. Only a document that stands alone moves —
+not one already in a folder, nor the main document of one. In the viewer,
+**Add a document** offers **One you have** to an admin of the folder,
+listing the documents this browser holds an admin link for.
+
 It follows that a leaked link is the whole folder, not one document, and
 that the access routes act on the main document whichever folder
 document they are reached through. `GET /api/documents/:uid/invites` on

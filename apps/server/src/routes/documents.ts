@@ -225,6 +225,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
   r.post('/:uid/copy', async (c) => copyDocument(c, deps));
+  r.post('/:uid/move-to-folder', async (c) => moveToFolder(c, deps));
   r.delete('/:uid', async (c) => deleteDocument(c, deps));
   r.get('/:uid/history', async (c) => getHistory(c, deps));
   r.get('/:uid/history/:oid/diff', async (c) => getHistoryDiff(c, deps));
@@ -425,6 +426,94 @@ async function createFolderDocument(
     },
     201,
   );
+}
+
+// --- POST /api/documents/:uid/move-to-folder -------------------------
+
+/**
+ * Move a standalone document into the folder `body.folder` belongs to, so
+ * the links people already hold for that folder open it too. Its text,
+ * history and discussion stay; its own access does not: a folder document
+ * has none, and leaving its invites behind inert would let them come back
+ * to life if it ever left the folder again.
+ *
+ * Widening who can open a document is an admin's call on both sides, so
+ * the header carries this document's admin link and `folder_admin_token`
+ * the folder's. An admin link already reveals the password, so neither
+ * side needs a password session on top.
+ */
+async function moveToFolder(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  const body = (await safeJson(c)) ?? {};
+  const folderRef = typeof body.folder === 'string' ? body.folder : '';
+  const folderToken = typeof body.folder_admin_token === 'string' ? body.folder_admin_token : '';
+
+  if (doc.folder_uid) {
+    return c.json({ error: 'already-in-folder', folder_uid: doc.folder_uid }, 409);
+  }
+  if (!requireAdminInvite(c, db, doc.uid)) return c.json({ error: 'forbidden' }, 403);
+
+  const target = loadDoc(db, folderRef);
+  const main = target ? accessDocument(db, target) : null;
+  if (!main) return c.json({ error: 'folder-not-found' }, 404);
+  if (main.uid === doc.uid) return c.json({ error: 'same-document' }, 400);
+  const folderAdmin = db
+    .prepare(`SELECT 1 FROM invites WHERE token = ? AND doc_uid = ? AND kind = 'admin'`)
+    .get(folderToken, main.uid);
+  if (!folderAdmin) return c.json({ error: 'forbidden' }, 403);
+
+  const result = db.transaction(() => {
+    // Re-read inside the transaction: either side may have changed since.
+    const fresh = loadDoc(db, doc.uid);
+    if (!fresh || fresh.folder_uid) return 'already-in-folder' as const;
+    if (folderMembers(db, fresh).length > 0) return 'has-folder-documents' as const;
+    const gate = loadDoc(db, main.uid);
+    if (!gate || gate.folder_uid) return 'folder-not-found' as const;
+
+    // Each ring that can open the folder keeps the document with the
+    // folder's link; a ring that only held this document's links loses
+    // it, as those links open nothing any more.
+    db.prepare(
+      `UPDATE keyring_docs
+          SET invite_token = (
+            SELECT k2.invite_token FROM keyring_docs k2
+              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?
+             WHERE k2.keyring_token = keyring_docs.keyring_token
+             LIMIT 1)
+        WHERE doc_uid = ?
+          AND EXISTS (
+            SELECT 1 FROM keyring_docs k2
+              JOIN invites i ON i.token = k2.invite_token AND i.doc_uid = ?
+             WHERE k2.keyring_token = keyring_docs.keyring_token)`,
+    ).run(main.uid, doc.uid, main.uid);
+    db.prepare(
+      `DELETE FROM keyring_docs
+        WHERE doc_uid = ?
+          AND invite_token NOT IN (SELECT token FROM invites WHERE doc_uid = ?)`,
+    ).run(doc.uid, main.uid);
+
+    // Upload URLs minted through these invites die with them.
+    db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
+    deleteDocNameHistory(db, doc.uid);
+    db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+    db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
+    db.prepare(
+      `UPDATE documents
+          SET folder_uid = ?, password_hash = NULL, password_recovery_ciphertext = NULL,
+              password_recovery_iv = NULL, invite_only = 1, updated_at = ?
+        WHERE uid = ?`,
+    ).run(main.uid, Date.now(), doc.uid);
+    // The folder's people, so @mentions resolve here before they visit.
+    copyDocUsers(db, main.uid, doc.uid);
+    return 'ok' as const;
+  })();
+  if (result !== 'ok') {
+    return c.json({ error: result }, result === 'folder-not-found' ? 404 : 409);
+  }
+
+  return c.json({ uid: doc.uid, folder_uid: main.uid });
 }
 
 // --- POST /api/documents/:uid/copy -----------------------------------
