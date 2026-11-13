@@ -202,6 +202,11 @@ export function setLiveDocViewPref(uid: string, name: DocViewPref, value: string
   for (const l of liveListeners) l();
 }
 
+const subscribeNothing = () => () => {};
+
 export function useLiveDocViewPref(uid: string | undefined, name: DocViewPref): string | null {
-  return useSyncExternalStore(subscribeLive, () => (uid ? liveDocViewPref(uid, name) : null));
+  // Without a document there is nothing to follow, so no storage listener.
+  return useSyncExternalStore(uid ? subscribeLive : subscribeNothing, () =>
+    uid ? liveDocViewPref(uid, name) : null,
+  );
 }

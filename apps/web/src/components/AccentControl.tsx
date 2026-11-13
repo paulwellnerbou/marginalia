@@ -130,10 +130,14 @@ function cssColorToHex(value: string): string | null {
   const direct = normalizeAccent(v);
   if (direct) return direct;
   if (probe === undefined) probe = document.createElement('canvas').getContext('2d');
-  if (!probe) return null;
-  // The canvas keeps its previous style for a value it can't parse.
-  probe.fillStyle = '#010203';
-  probe.fillStyle = v;
-  const out = String(probe.fillStyle);
-  return out === '#010203' ? null : normalizeAccent(out);
+  const ctx = probe;
+  if (!ctx) return null;
+  // The canvas keeps its previous style for a value it can't parse, so a
+  // value parsed only when two different starting styles both give way.
+  const parsed = ['#000000', '#ffffff'].map((start) => {
+    ctx.fillStyle = start;
+    ctx.fillStyle = v;
+    return String(ctx.fillStyle);
+  });
+  return parsed[0] === parsed[1] ? normalizeAccent(parsed[0]) : null;
 }
