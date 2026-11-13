@@ -1,7 +1,9 @@
-import { type CSSProperties, useMemo, useSyncExternalStore } from 'react';
+import { accentCssVars } from '@marginalia/themes/accent';
+import { type CSSProperties, useMemo } from 'react';
 import type { DocumentFormat } from './api.js';
 import { useAppearance } from './appearance.js';
-import { docViewUidOf, readDocViewPref, writeDocViewPref } from './doc-view-prefs.js';
+import { useDocAccent } from './doc-accent.js';
+import { liveDocViewPref, setLiveDocViewPref, useLiveDocViewPref } from './doc-view-prefs.js';
 
 /**
  * The reader's own paper and ink, overriding the theme's
@@ -58,68 +60,19 @@ export function withDocColor(
   return next;
 }
 
-interface Cached {
-  raw: string | null;
-  value: DocColorOverrides;
-}
-
-function load(docUid: string): Cached {
-  const raw = readDocViewPref(docUid, 'docColors');
-  return { raw, value: parseDocColors(raw) };
-}
-
-const NONE: DocColorOverrides = {};
-/** Per uid, so a snapshot keeps its identity between renders. */
-const cache = new Map<string, Cached>();
-const listeners = new Set<() => void>();
-
-function snapshot(docUid: string): DocColorOverrides {
-  let entry = cache.get(docUid);
-  if (!entry) {
-    entry = load(docUid);
-    cache.set(docUid, entry);
-  }
-  return entry.value;
-}
-
-function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0) window.addEventListener('storage', onStorage);
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-    if (listeners.size === 0) window.removeEventListener('storage', onStorage);
-  };
-}
-
-/**
- * Another tab changed a document's view settings, or cleared storage.
- * The entry holds every view setting, and a pane drag elsewhere writes
- * it repeatedly, so only a change to the colors themselves re-renders.
- */
-function onStorage(event: StorageEvent): void {
-  if (event.key === null) cache.clear();
-  else {
-    const uid = docViewUidOf(event.key);
-    const entry = uid === null ? undefined : cache.get(uid);
-    if (uid === null || !entry) return;
-    const fresh = load(uid);
-    if (fresh.raw === entry.raw) return;
-    cache.set(uid, fresh);
-  }
-  for (const l of listeners) l();
-}
-
 export function setDocColor(
   docUid: string,
   mode: DocColorMode,
   role: DocColorRole,
   value: string | null,
 ): void {
-  const next = withDocColor(snapshot(docUid), mode, role, value);
-  const raw = Object.keys(next).length > 0 ? JSON.stringify(next) : null;
-  cache.set(docUid, { raw, value: next });
-  writeDocViewPref(docUid, 'docColors', raw);
-  for (const l of listeners) l();
+  const current = parseDocColors(liveDocViewPref(docUid, 'docColors'));
+  const next = withDocColor(current, mode, role, value);
+  setLiveDocViewPref(
+    docUid,
+    'docColors',
+    Object.keys(next).length > 0 ? JSON.stringify(next) : null,
+  );
 }
 
 /** The overrides for the appearance the page is showing right now. */
@@ -128,7 +81,8 @@ export function useDocColors(docUid: string | undefined): {
   colors: DocColors;
 } {
   const { resolved } = useAppearance();
-  const all = useSyncExternalStore(subscribe, () => (docUid ? snapshot(docUid) : NONE));
+  const raw = useLiveDocViewPref(docUid, 'docColors');
+  const all = useMemo(() => parseDocColors(raw), [raw]);
   return { mode: resolved, colors: all[resolved] ?? {} };
 }
 
@@ -137,9 +91,13 @@ export function useDocColors(docUid: string | undefined): {
  * redeclares the theme's colors, so an override set only on an ancestor
  * would be shadowed one level down.
  */
-export function docColorStyle(colors: DocColors): CSSProperties | undefined {
-  if (!colors.bg && !colors.fg) return undefined;
+export function docColorStyle(
+  colors: DocColors,
+  accent?: { hex: string; mode: DocColorMode },
+): CSSProperties | undefined {
+  if (!colors.bg && !colors.fg && !accent) return undefined;
   return {
+    ...(accent ? accentCssVars(accent.hex, accent.mode) : {}),
     ...(colors.bg ? { ['--md-color-bg' as string]: colors.bg } : {}),
     ...(colors.fg ? { ['--md-color-fg' as string]: colors.fg } : {}),
   };
@@ -147,20 +105,24 @@ export function docColorStyle(colors: DocColors): CSSProperties | undefined {
 
 /**
  * The style every rendering of a document carries, so previews match the
- * reader's paper. HTML pages bring their own look and get none.
+ * reader's paper and accent. HTML pages bring their own look and get none.
  */
 export function useDocColorStyle(
   docUid: string | undefined,
   format: DocumentFormat | undefined,
 ): CSSProperties | undefined {
-  const { colors } = useDocColors(docUid);
+  const { mode, colors } = useDocColors(docUid);
+  const { accent } = useDocAccent(docUid);
   const { bg, fg } = colors;
   return useMemo(
     () =>
       format === 'html'
         ? undefined
-        : docColorStyle({ ...(bg ? { bg } : {}), ...(fg ? { fg } : {}) }),
-    [format, bg, fg],
+        : docColorStyle(
+            { ...(bg ? { bg } : {}), ...(fg ? { fg } : {}) },
+            accent ? { hex: accent, mode } : undefined,
+          ),
+    [format, bg, fg, accent, mode],
   );
 }
 

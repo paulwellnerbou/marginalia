@@ -38,6 +38,7 @@ import {
   type SectionBalancer,
 } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
+import { useDocAccentDefault } from '../lib/doc-accent.js';
 import { useDocColorStyle } from '../lib/doc-colors.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
@@ -248,6 +249,7 @@ export function EditPage() {
     localStorage.setItem(LS_WORD_WRAP, String(wordWrap));
   }, [wordWrap]);
   const isHtml = doc?.format === 'html';
+  useDocAccentDefault(uid, doc?.default_accent);
   const docColorOverride = useDocColorStyle(uid, doc?.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc?.format ?? 'markdown', theme));

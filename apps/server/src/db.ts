@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS documents (
   -- matches the migration below, which must not close existing docs.
   invite_only          INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
+  -- Accent color (#rrggbb) every reader sees unless they pick their own;
+  -- NULL keeps the theme's. Shades derive from it (themes/src/accent.ts).
+  default_accent       TEXT,
   -- 'markdown' | 'asciidoc' | 'html'. Legacy rows without a format are treated
   -- as markdown by the route layer (their path column already ends
   -- in ".md").
@@ -434,6 +437,8 @@ export interface DocumentRow {
   /** 1 → only invite holders may read; see the schema comment. */
   invite_only: number;
   default_theme: string;
+  /** `#rrggbb`, or null for the theme's own accent. */
+  default_accent: string | null;
   format: DocumentFormat;
   /**
    * Per-document override of the mermaid renderer used for DOCX/PDF
@@ -741,6 +746,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
   ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
   ensureColumn(db, 'documents', 'cover_ref', 'TEXT');
+  ensureColumn(db, 'documents', 'default_accent', 'TEXT');
   ensureColumn(db, 'documents', 'folder_uid', 'TEXT');
   // After the column, for the same reason as idx_sessions_invite below.
   db.exec('CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_uid)');

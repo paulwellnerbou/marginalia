@@ -11,6 +11,7 @@ import {
   spanHead,
   splitMarkdownChapters,
 } from '@marginalia/renderer';
+import { normalizeAccent } from '@marginalia/themes/accent';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
@@ -67,6 +68,7 @@ import {
   PROPOSAL_ANSWERS_JSON_SQL,
   parseAnswerIds,
 } from '../db.js';
+import { accentOverrideCss, exportAccent } from '../export/accent-css.js';
 import { type EpubChapter, type EpubCover, exportEpub } from '../export/epub.js';
 import {
   countLiveMermaidBlocks,
@@ -397,9 +399,20 @@ async function createFolderDocument(
     db.prepare(
       `INSERT INTO documents
          (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme,
-          format, mermaid_renderer, folder_uid, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, 0, 1, ?, ?, ?, ?, ?, ?)`,
-    ).run(uid, uid, docName, theme, opts.format, main.mermaid_renderer, main.uid, now, now);
+          default_accent, format, mermaid_renderer, folder_uid, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 0, 1, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      uid,
+      uid,
+      docName,
+      theme,
+      main.default_accent,
+      opts.format,
+      main.mermaid_renderer,
+      main.uid,
+      now,
+      now,
+    );
     // The folder's people, so author names and @mentions resolve here
     // before each of them has visited.
     copyDocUsers(db, main.uid, uid);
@@ -418,6 +431,7 @@ async function createFolderDocument(
       folder_uid: main.uid,
       url: `/d/${uid}`,
       default_theme: theme,
+      default_accent: main.default_accent,
       mermaid_renderer: main.mermaid_renderer,
       format: opts.format,
       invite_only: main.invite_only === 1,
@@ -526,8 +540,8 @@ async function copyDocument(c: Context, deps: AppDeps) {
     db.prepare(
       `INSERT INTO documents
          (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme,
-          format, mermaid_renderer, cover_ref, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
+          default_accent, format, mermaid_renderer, cover_ref, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       uid,
       uid,
@@ -535,6 +549,7 @@ async function copyDocument(c: Context, deps: AppDeps) {
       passwordHash,
       inviteOnly ? 1 : 0,
       doc.default_theme,
+      doc.default_accent,
       doc.format,
       doc.mermaid_renderer,
       doc.cover_ref,
@@ -636,6 +651,7 @@ async function copyDocument(c: Context, deps: AppDeps) {
       display_name: adminInvite.display_name,
     },
     default_theme: doc.default_theme,
+    default_accent: doc.default_accent,
     mermaid_renderer: doc.mermaid_renderer,
     format: doc.format,
     invite_only: inviteOnly,
@@ -874,6 +890,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     cover: loadCoverDescriptor(db, doc),
     format: doc.format,
     default_theme: doc.default_theme,
+    default_accent: doc.default_accent,
     mermaid_renderer: doc.mermaid_renderer,
     password_protected: gate.password_hash !== null,
     invite_only: gate.invite_only === 1,
@@ -1081,6 +1098,14 @@ async function updateSettings(c: Context, deps: AppDeps) {
   if (typeof body.default_theme === 'string') {
     updates.push(['default_theme', body.default_theme]);
   }
+  // null clears it back to the theme's own accent.
+  if ('default_accent' in body) {
+    const accent = normalizeAccent(body.default_accent);
+    if (body.default_accent !== null && accent === null) {
+      return c.json({ error: 'invalid-accent' }, 400);
+    }
+    updates.push(['default_accent', accent]);
+  }
   // Mermaid renderer override: 'mmdr' | 'chromium' | null (null clears
   // the override, so the document falls back to the server default).
   // Anything else → 400; we don't silently coerce so an old client
@@ -1139,6 +1164,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
   const response: Record<string, unknown> = {
     name: fresh.name,
     default_theme: fresh.default_theme,
+    default_accent: fresh.default_accent,
     mermaid_renderer: fresh.mermaid_renderer,
     password_protected: gate.password_hash !== null,
     invite_only: gate.invite_only === 1,
@@ -1341,6 +1367,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
       // tooling can still read bundles. The field is meaningless on import.
       editable_by_anyone: doc.editable_by_anyone === 1,
       default_theme: doc.default_theme,
+      default_accent: doc.default_accent,
       mermaid_renderer: doc.mermaid_renderer,
     },
     representation: {
@@ -2052,6 +2079,7 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
     typeof themeParam === 'string' && themeParam.length > 0
       ? themeParam
       : (doc.default_theme ?? 'default');
+  const accent = exportAccent(c.req.query('accent'), doc.default_accent);
 
   // Summary and about are about the book, not in it.
   const source = extractDocMeta(store.read(doc), doc.format).source;
@@ -2136,7 +2164,9 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
 
   // An HTML document brings its own look; no theme is layered under it.
   const [themeCss, printCss] = await Promise.all([
-    doc.format === 'html' ? (rendered.css ?? '') : loadThemeCss(theme),
+    doc.format === 'html'
+      ? (rendered.css ?? '')
+      : loadThemeCss(theme).then((css) => css + accentOverrideCss(accent)),
     loadPrintCss(),
   ]);
 
@@ -2209,6 +2239,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       ? docSpec.name.trim().slice(0, 200)
       : null;
   const theme = typeof docSpec.default_theme === 'string' ? docSpec.default_theme : 'default';
+  const accent = normalizeAccent(docSpec.default_accent);
   const format: DocumentFormat = isDocumentFormat(docSpec.format) ? docSpec.format : 'markdown';
   // Mermaid renderer override: nullable, must match the typed enum
   // when present. Anything else (including legacy bundles without
@@ -2240,9 +2271,9 @@ async function importDocument(c: Context, deps: AppDeps) {
   }
   db.prepare(
     `INSERT INTO documents
-       (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme, format, mermaid_renderer, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, 0, 1, ?, ?, ?, ?, ?)`,
-  ).run(uid, uid, name, theme, format, mermaidRenderer, now, now);
+       (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme, default_accent, format, mermaid_renderer, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 0, 1, ?, ?, ?, ?, ?, ?)`,
+  ).run(uid, uid, name, theme, accent, format, mermaidRenderer, now, now);
   // Seed the roster before the importer's own upsert so their current
   // display name still wins for their own client id.
   importBundleParticipants(db, uid, bundle.participants, now);

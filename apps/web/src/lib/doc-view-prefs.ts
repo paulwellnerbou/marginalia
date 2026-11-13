@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 
 /**
  * How a reader has set up one document's view — layout, widths, text
@@ -27,6 +27,7 @@ const PREFS = [
   'commentsDisplayMode',
   'rightTab',
   'docColors',
+  'accent',
   'threadListSort',
   'threadListStatus',
   'threadListKind',
@@ -151,4 +152,61 @@ export function usePersistDocViewPref(
     last.current = next;
     if (write) writeDocViewPref(uid, name, value ?? null);
   }, [uid, name, value]);
+}
+
+// --- Live settings --------------------------------------------------
+// A setting that restyles the document as it changes (paper, ink,
+// accent) is read through this store, so every rendering follows a
+// change made here or in another tab. Snapshots are the stored strings,
+// which compare by value, so a write to some other setting of the same
+// document (a pane drag writes repeatedly) re-renders nothing.
+
+const live = new Map<string, string | null>();
+const liveListeners = new Set<() => void>();
+
+function liveKey(uid: string, name: DocViewPref): string {
+  return `${uid}\0${name}`;
+}
+
+function onLiveStorage(event: StorageEvent): void {
+  if (event.key === null) live.clear();
+  else {
+    const uid = docViewUidOf(event.key);
+    if (uid === null) return;
+    for (const key of live.keys()) {
+      if (key.startsWith(`${uid}\0`)) live.delete(key);
+    }
+  }
+  for (const l of liveListeners) l();
+}
+
+function subscribeLive(listener: () => void): () => void {
+  if (liveListeners.size === 0) window.addEventListener('storage', onLiveStorage);
+  liveListeners.add(listener);
+  return () => {
+    liveListeners.delete(listener);
+    if (liveListeners.size === 0) window.removeEventListener('storage', onLiveStorage);
+  };
+}
+
+/** The setting as stored, through the live cache. */
+export function liveDocViewPref(uid: string, name: DocViewPref): string | null {
+  const key = liveKey(uid, name);
+  if (!live.has(key)) live.set(key, readDocViewPref(uid, name));
+  return live.get(key) ?? null;
+}
+
+export function setLiveDocViewPref(uid: string, name: DocViewPref, value: string | null): void {
+  live.set(liveKey(uid, name), value);
+  writeDocViewPref(uid, name, value);
+  for (const l of liveListeners) l();
+}
+
+const subscribeNothing = () => () => {};
+
+export function useLiveDocViewPref(uid: string | undefined, name: DocViewPref): string | null {
+  // Without a document there is nothing to follow, so no storage listener.
+  return useSyncExternalStore(uid ? subscribeLive : subscribeNothing, () =>
+    uid ? liveDocViewPref(uid, name) : null,
+  );
 }

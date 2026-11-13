@@ -1,6 +1,6 @@
 import { ResetIcon } from '@radix-ui/react-icons';
 import { Flex, IconButton, Text, Tooltip } from '@radix-ui/themes';
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { type RefObject, useEffect, useRef, useState } from 'react';
 import {
   type DocColorRole,
   effectiveBackground,
@@ -8,6 +8,7 @@ import {
   setDocColor,
   useDocColors,
 } from '../lib/doc-colors.js';
+import { useThemeMeasure } from '../lib/useThemeMeasure.js';
 
 interface Props {
   docUid: string;
@@ -35,12 +36,9 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
 
   // What the theme shows without an override, so the swatch starts there.
   // Measured off the live DOM because the dark palettes leave the paper
-  // transparent. Theme stylesheets load async, hence the `load` listener;
-  // Radix's Theme flips its `dark` class a render after the appearance
-  // changes, hence the observer on it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: mode and theme change what the DOM shows, which is read, not referenced.
-  useLayoutEffect(() => {
-    const measure = () => {
+  // transparent.
+  useThemeMeasure(
+    () => {
       const next: Partial<Record<DocColorRole, string>> = {};
       if (!colors.bg) {
         const bg = effectiveBackground(paperRef.current);
@@ -51,17 +49,10 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
         if (fg) next.fg = fg;
       }
       setThemeColors((prev) => ({ ...prev, ...next }));
-    };
-    measure();
-    document.head.addEventListener('load', measure, true);
-    const appRoot = paperRef.current?.closest('.radix-themes');
-    const observer = new MutationObserver(measure);
-    if (appRoot) observer.observe(appRoot, { attributes: true, attributeFilter: ['class'] });
-    return () => {
-      document.head.removeEventListener('load', measure, true);
-      observer.disconnect();
-    };
-  }, [paperRef, inkRef, colors.bg, colors.fg, mode, theme]);
+    },
+    paperRef,
+    [inkRef, colors.bg, colors.fg, mode, theme],
+  );
 
   return (
     <>
@@ -75,7 +66,8 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
             label={label}
             ariaLabel={`${label} color (${mode} mode)`}
             value={value}
-            overridden={!!override}
+            inherited={override ? undefined : "The theme's color"}
+            canReset={!!override}
             resetLabel={`Reset ${noun} to the theme's`}
             onChange={(next) => setDocColor(docUid, mode, role, next)}
             onReset={() => setDocColor(docUid, mode, role, null)}
@@ -86,11 +78,13 @@ export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
   );
 }
 
-function ColorRow({
+/** One row of the display grid: a native color input, its hex, and a reset. */
+export function ColorRow({
   label,
   ariaLabel,
   value,
-  overridden,
+  inherited,
+  canReset,
   resetLabel,
   onChange,
   onReset,
@@ -98,7 +92,9 @@ function ColorRow({
   label: string;
   ariaLabel: string;
   value: string;
-  overridden: boolean;
+  /** Where the value comes from when it is not the reader's own pick; dims the hex. */
+  inherited?: string | undefined;
+  canReset: boolean;
   resetLabel: string;
   onChange: (hex: string) => void;
   onReset: () => void;
@@ -139,6 +135,7 @@ function ColorRow({
   );
 
   const shown = draft ?? value;
+  const own = !inherited || draft !== null;
 
   return (
     <>
@@ -154,8 +151,8 @@ function ColorRow({
           onChange={(e) => schedule(e.currentTarget.value)}
         />
         <span
-          className={`doc-color-value${overridden || draft ? '' : ' doc-color-value-theme'}`}
-          title={overridden || draft ? undefined : "The theme's color"}
+          className={`doc-color-value${own ? '' : ' doc-color-value-theme'}`}
+          title={own ? undefined : inherited}
         >
           {shown}
         </span>
@@ -166,7 +163,7 @@ function ColorRow({
             color="gray"
             className="doc-stepper-reset"
             aria-label={resetLabel}
-            disabled={!overridden}
+            disabled={!canReset}
             onClick={onReset}
           >
             <ResetIcon />
