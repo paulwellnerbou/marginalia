@@ -278,6 +278,7 @@ when no password is set.
 | `upload_image` | Attach an image to an existing document under the name its source uses (`![](name.png)`, `image::name.png[]`). Needs editor or admin. |
 | `request_image_uploads` | Upload URLs for images on disk, for an existing document: one per name, single-use, 15 minutes. Needs editor or admin. |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
+| `move_to_folder` | Move an existing document into a folder (see [Folders](#folders)). Needs both admin links. |
 
 ## Folders
 
@@ -319,6 +320,20 @@ It needs admin or editor on the folder, and a `name` — the folder lists
 its documents by it. There is no new link in the answer: the folder's
 links already open it. `password_protected`, `invite_only` and
 `base_url` do not apply, since the folder decides all three.
+
+A document that already exists moves in with its text, history and
+discussion:
+
+```
+move_to_folder  document=<its admin URL>  folder=<the story's admin URL>
+```
+
+Its own links, password and sessions are deleted, so anyone who only had
+those loses it; the folder's links open it from then on, and the session
+files the folder's link under it. Moving changes who can open a document,
+so it takes the admin link of both — an agent key, capped at editor,
+never can. Only a document that stands alone moves: not one already in a
+folder, nor the main document of one.
 
 ## Reading a chapter at a time
 

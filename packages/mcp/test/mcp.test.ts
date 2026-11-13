@@ -194,6 +194,7 @@ describe('marginalia MCP server', () => {
         'list_history',
         'list_invites',
         'list_threads',
+        'move_to_folder',
         'propose_insertion',
         'react_to_comment',
         'reply_to_thread',
@@ -2032,6 +2033,70 @@ Prose in chapter seven.
         await session.close();
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+
+    test('moves an existing document in, which then opens with the folder link', async () => {
+      const story = await seedBook();
+      const created = await call('create_document', {
+        source: '= Notes\n\nWritten before the folder existed.\n',
+        name: 'Notes',
+        format: 'asciidoc',
+      });
+      const notesUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+      const notes = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+
+      const moved = await call('move_to_folder', { document: notesUrl, folder: story.adminUrl });
+      expect(moved).toContain(`Moved ${notes} into the folder of ${story.uid}.`);
+
+      // The session now holds the folder's link for it, so a bare uid works.
+      const read = await call('get_document', { document: notes });
+      expect(read).toContain('Written before the folder existed');
+      expect(read).toContain('your role: admin');
+      expect(read).toContain('folder: 2 documents');
+
+      // Its own admin link opens nothing any more.
+      const stale = await callExpectingError('get_document', { document: notesUrl });
+      expect(stale).toContain('invite-required');
+    });
+
+    test('refuses a move without an admin link on both sides', async () => {
+      const story = await seedBook();
+      const draft = await seedBook('# Draft\n\nLoose pages.\n');
+      const editorLink = await call('create_invite', { document: draft.adminUrl, role: 'editor' });
+      const editorUrl = /^(https?:\/\/\S+)$/m.exec(editorLink)?.[1] as string;
+      expect(editorUrl).toBeTruthy();
+
+      const asEditor = await callExpectingError('move_to_folder', {
+        document: editorUrl,
+        folder: story.adminUrl,
+      });
+      expect(asEditor).toContain('both links must be admin links');
+
+      const { session, dir } = await freshSession();
+      try {
+        const noLink = await callOn(session, 'move_to_folder', {
+          document: draft.adminUrl,
+          folder: story.uid,
+        });
+        expect(noLink.isError).toBe(true);
+        expect(noLink.body).toContain('No link for the folder');
+      } finally {
+        await session.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+      // Still where it was, with its own link.
+      expect(await call('get_document', { document: draft.adminUrl })).toContain('Loose pages');
+    });
+
+    test('refuses to move a document that is already in a folder', async () => {
+      const story = await seedBook();
+      const other = await seedBook('# Other\n');
+      const outline = await addOutline(story.adminUrl);
+      const message = await callExpectingError('move_to_folder', {
+        document: `${outline}/${/\/d\/[^/]+\/([^/\s]+)/.exec(story.adminUrl)?.[1]}`,
+        folder: other.adminUrl,
+      });
+      expect(message).toContain('already in a folder');
     });
 
     test('asks for a name, which the folder lists its documents by', async () => {
