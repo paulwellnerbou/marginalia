@@ -483,6 +483,10 @@ describe('marginalia MCP server', () => {
     expect(bookmarks).toContain('label: (none)');
     expect(bookmarks).toContain('They reached the well on the fourth evening');
 
+    // Named by id, a bookmark comes back without asking for the bookmarks kind.
+    const named = await call('list_threads', { document: adminUrl, thread_id: threadId });
+    expect(named).toContain('=== BOOKMARK 1/1 — shared ===');
+
     // Asking again relabels the bookmark already there instead of adding one.
     const again = await call('create_bookmark', {
       document: adminUrl,

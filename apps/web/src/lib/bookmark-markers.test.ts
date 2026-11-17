@@ -61,15 +61,12 @@ test('a thread is a bookmark only when the server flags it, whatever its body', 
 });
 
 test('only anchored bookmarks get a marker, carrying the section that picks their block', () => {
-  const specs = bookmarkMarkerSpecs(
-    [
-      thread('c', 'A remark'),
-      thread('e', ''),
-      thread('b', '', bookmark),
-      thread('lost', '', { ...bookmark, link_status: 'orphaned' }),
-    ],
-    'client-paul',
-  );
+  const specs = bookmarkMarkerSpecs([
+    thread('c', 'A remark'),
+    thread('e', ''),
+    thread('b', '', bookmark),
+    thread('lost', '', { ...bookmark, link_status: 'orphaned' }),
+  ]);
   expect(specs).toEqual([
     {
       threadId: 'b',
@@ -88,7 +85,8 @@ test('only anchored bookmarks get a marker, carrying the section that picks thei
 test('a bookmark someone else shared is marked as theirs', () => {
   const shared = thread('s', 'Key passage', bookmark);
   shared.comments[0].author = { client_id: 'client-ada', display_name: 'Ada' };
-  const specs = bookmarkMarkerSpecs([shared, thread('b', '', bookmark)], 'client-paul');
+  shared.comments[0].capabilities = { edit: false, delete: false, react: false };
+  const specs = bookmarkMarkerSpecs([shared, thread('b', '', bookmark)]);
   expect(specs.map((s) => [s.threadId, s.own])).toEqual([
     ['s', false],
     ['b', true],

@@ -2317,7 +2317,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         landThread(updated);
       } catch (err) {
         reportError('DocumentLayout.setCommentHidden', err, { commentId: id, hidden });
-        const title = hidden ? 'Could not hide comment' : 'Could not unhide comment';
+        const onBookmark = threadsRef.current.some((t) => t.id === id && isBookmark(t));
+        const title = onBookmark
+          ? hidden
+            ? 'Could not make that bookmark private'
+            : 'Could not share that bookmark'
+          : hidden
+            ? 'Could not hide comment'
+            : 'Could not unhide comment';
         showErrorToast(title, apiErrorMessage(err, title));
       }
     },
@@ -2904,7 +2911,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   // Serialized so the ribbons re-sync when one would move, not on every
   // thread update — a reply elsewhere must not touch the document's DOM.
   const bookmarkMarkersKey = useMemo(
-    () => JSON.stringify(bookmarkMarkerSpecs(bookmarkThreads, getClientId())),
+    () => JSON.stringify(bookmarkMarkerSpecs(bookmarkThreads)),
     [bookmarkThreads],
   );
   const bookmarkMarkers = useMemo(

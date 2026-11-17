@@ -42,10 +42,7 @@ export interface BookmarkMarkerSpec {
  * one lost its passage in an edit; it stays listed in the Bookmarks tab but
  * marks nothing.
  */
-export function bookmarkMarkerSpecs(
-  threads: readonly Thread[],
-  viewerClientId: string,
-): BookmarkMarkerSpec[] {
+export function bookmarkMarkerSpecs(threads: readonly Thread[]): BookmarkMarkerSpec[] {
   const specs: BookmarkMarkerSpec[] = [];
   for (const t of threads) {
     if (!isBookmark(t) || t.link_status === 'orphaned' || !t.anchor.block_id) continue;
@@ -58,10 +55,19 @@ export function bookmarkMarkerSpecs(
         section_index: t.anchor.section_index,
         section_index_path: t.anchor.section_index_path,
       },
-      own: t.comments[0].author.client_id === viewerClientId,
+      own: isOwnBookmark(t),
     });
   }
   return specs;
+}
+
+/**
+ * Whether the viewer made this bookmark. Read from the server's answer, not
+ * a client-id comparison: only a bookmark's author may edit its label, and
+ * the server knows which id this device writes under after pairing.
+ */
+export function isOwnBookmark(t: Thread): boolean {
+  return t.comments[0].capabilities.edit;
 }
 
 /**

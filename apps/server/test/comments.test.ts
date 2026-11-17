@@ -444,6 +444,39 @@ describe('threads API', () => {
     expect(bobLabel.status).toBe(404);
   });
 
+  test('a bookmark label is capped at 200 characters, on create and on edit', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const create = (body: string) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote: 'Title' },
+            bookmark: true,
+            body,
+          }),
+        }),
+      );
+    const tooLong = await create('x'.repeat(201));
+    expect(tooLong.status).toBe(400);
+    expect(((await tooLong.json()) as { error: string }).error).toBe('bookmark-label-too-long');
+
+    const ok = await create(`  ${'x'.repeat(200)}  `);
+    expect(ok.status).toBe(201);
+    const { thread } = (await ok.json()) as { thread: ThreadShape };
+    const relabel = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}`, {
+        method: 'PATCH',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'y'.repeat(201) }),
+      }),
+    );
+    expect(relabel.status).toBe(400);
+    expect(((await relabel.json()) as { error: string }).error).toBe('bookmark-label-too-long');
+  });
+
   test('a shared bookmark is seen by everyone, owned by its author and still no discussion', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);

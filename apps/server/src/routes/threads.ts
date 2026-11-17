@@ -352,6 +352,9 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
     // A bookmark's body is its optional label.
     if (!bookmark && !rootBody.body) return c.json({ error: 'body-required' }, 400);
+    if (bookmark && (rootBody.body?.length ?? 0) > BOOKMARK_LABEL_MAX_LENGTH) {
+      return c.json({ error: 'bookmark-label-too-long' }, 400);
+    }
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
     for (const answeredId of proposal.answersThreadIds) {
@@ -825,6 +828,9 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   // A bookmark's label can be cleared, like a proposal's rationale.
   const next = parseThreadRootBody(body.body, isProposalRow(row) || row.is_bookmark === 1);
   if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
+  if (row.is_bookmark === 1 && (next.body?.length ?? 0) > BOOKMARK_LABEL_MAX_LENGTH) {
+    return c.json({ error: 'bookmark-label-too-long' }, 400);
+  }
   const parsedUpdate = asProposalUpdate(body.proposal);
   if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
   const proposalUpdate = parsedUpdate.update;
@@ -3400,6 +3406,9 @@ function parseOptionalBody(v: unknown): OptionalBodyParse {
 }
 
 type ThreadRootBodyParse = { ok: true; body: string | undefined } | { ok: false };
+
+/** A label names a place; anything longer is a comment. Matches the viewer's field. */
+const BOOKMARK_LABEL_MAX_LENGTH = 200;
 
 function parseThreadRootBody(v: unknown, allowEmpty: boolean): ThreadRootBodyParse {
   if (v === null && allowEmpty) return { ok: true, body: '' };

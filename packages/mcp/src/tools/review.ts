@@ -134,7 +134,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .optional()
           .describe(
             'Default "all": comment threads and edit proposals. "bookmarks" lists the shared ' +
-              'bookmarks instead (and your own), which no other kind includes.',
+              'bookmarks instead (and your own), which no other kind includes — except a ' +
+              'bookmark named by thread_id, which is shown whatever the kind.',
           ),
         thread_id: z
           .string()
@@ -272,11 +273,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               : startsWithPath(t.anchor.heading_path, section.path);
           });
         }
-        // A bookmark is nobody's request, so it stays out of every review queue.
-        threads =
-          args.kind === 'bookmarks'
-            ? threads.filter((t) => t.bookmark === true)
-            : threads.filter((t) => t.bookmark !== true);
+        // A bookmark is nobody's request, so it stays out of every review
+        // queue — but a thread named by id comes back whatever it is.
+        if (args.kind === 'bookmarks') threads = threads.filter((t) => t.bookmark === true);
+        else if (targetId === null) threads = threads.filter((t) => t.bookmark !== true);
         if (args.kind === 'comments') threads = threads.filter((t) => t.proposal === null);
         if (args.kind === 'proposals') threads = threads.filter((t) => t.proposal !== null);
         // The server already filtered by state — repeated here only so an

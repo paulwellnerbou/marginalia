@@ -20,6 +20,7 @@ import {
 import type { AnchorSection } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 import { isBookmark, isProposal, proposalStatus } from '../../lib/api.js';
+import { isOwnBookmark } from '../../lib/bookmark-markers.js';
 import { usePersistDocViewPref } from '../../lib/doc-view-prefs.js';
 import { getClientId } from '../../lib/identity.js';
 import {
@@ -550,7 +551,7 @@ export function InlineCommentsList({
         <BookmarkCard
           key={thread.id}
           thread={thread}
-          own={thread.comments[0].author.client_id === viewerClientId}
+          own={isOwnBookmark(thread)}
           focused={focusedId === thread.id}
           flashPhase={flash?.id === thread.id ? flash.phase : null}
           onJump={onJump}
