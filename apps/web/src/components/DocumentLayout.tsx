@@ -2911,12 +2911,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     () => JSON.parse(bookmarkMarkersKey) as BookmarkMarkerSpec[],
     [bookmarkMarkersKey],
   );
-  const isBlockBookmarked = useCallback(
-    (el: HTMLElement): boolean => {
+  const blockBookmark = useCallback(
+    (el: HTMLElement): { label: string } | null => {
       const root = docRef.current;
-      return root ? bookmarkMarking(root, el, bookmarkMarkers) !== null : false;
+      const marking = root ? bookmarkMarking(root, el, bookmarkMarkers) : null;
+      if (!marking) return null;
+      const thread = bookmarkThreads.find((t) => t.id === marking.threadId);
+      return { label: thread?.comments[0]?.body.trim() ?? '' };
     },
-    [bookmarkMarkers],
+    [bookmarkMarkers, bookmarkThreads],
   );
   // Blocks with a bookmark request still out: the hover button stays under
   // the cursor, and a second click before the first lands would post twice.
@@ -3908,7 +3911,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                             rootRef={docRef}
                             onComment={startCommentDraft}
                             onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-                            isBookmarked={isBlockBookmarked}
+                            bookmarkOf={blockBookmark}
                             onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
                             onEditChapter={(headingBlockId, headingCopy) =>
                               navigate(

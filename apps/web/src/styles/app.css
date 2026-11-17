@@ -4445,6 +4445,12 @@ button.primary:disabled {
 .block-actions-btn.block-actions-btn-on {
   color: var(--ui-accent-strong);
 }
+.block-actions-btn.block-actions-btn-danger {
+  color: var(--ui-danger);
+}
+.block-actions-btn.block-actions-btn-danger:hover {
+  border-color: var(--ui-danger);
+}
 
 /* A reader's bookmark on a block (see lib/bookmark-markers.ts). Sits in the
    right-hand gutter level with the first line: the left gutter is where a
