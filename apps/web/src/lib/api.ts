@@ -2116,7 +2116,7 @@ export function setThreadBookmarked(
   ).then((res) => res.bookmarked_thread_ids);
 }
 
-/** Marks a place in the document: an anchored thread with no text, private to its author. */
+/** Marks a place in the document: an anchored thread with no text, private to its author until they share it. */
 export function createBookmark(
   uid: string,
   anchor: CommentAnchor,

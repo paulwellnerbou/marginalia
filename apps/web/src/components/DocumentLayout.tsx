@@ -2815,9 +2815,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   const title = documentTitle(doc);
 
   /**
-   * The reader's bookmarks arrive as threads, but nothing that lists
-   * discussion shows them: they belong to the Bookmarks tab and to the
-   * ribbons beside the text alone.
+   * Bookmarks — the reader's own and those others shared — arrive as
+   * threads, but nothing that lists discussion shows them: they belong to
+   * the Bookmarks tab and to the ribbons beside the text alone.
    */
   const commentThreads = useMemo(() => threads.filter((t) => !isBookmark(t)), [threads]);
   /**
@@ -2904,19 +2904,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   // Serialized so the ribbons re-sync when one would move, not on every
   // thread update — a reply elsewhere must not touch the document's DOM.
   const bookmarkMarkersKey = useMemo(
-    () => JSON.stringify(bookmarkMarkerSpecs(bookmarkThreads)),
+    () => JSON.stringify(bookmarkMarkerSpecs(bookmarkThreads, getClientId())),
     [bookmarkThreads],
   );
   const bookmarkMarkers = useMemo(
     () => JSON.parse(bookmarkMarkersKey) as BookmarkMarkerSpec[],
     [bookmarkMarkersKey],
   );
+  // The hover button adds and removes the reader's own bookmark; one
+  // somebody else shared on the same block is not theirs to take off.
+  const ownBookmarkMarkers = useMemo(() => bookmarkMarkers.filter((b) => b.own), [bookmarkMarkers]);
   const isBlockBookmarked = useCallback(
     (el: HTMLElement): boolean => {
       const root = docRef.current;
-      return root ? bookmarkMarking(root, el, bookmarkMarkers) !== null : false;
+      return root ? bookmarkMarking(root, el, ownBookmarkMarkers) !== null : false;
     },
-    [bookmarkMarkers],
+    [ownBookmarkMarkers],
   );
   // Blocks with a bookmark request still out: the hover button stays under
   // the cursor, and a second click before the first lands would post twice.
@@ -2927,7 +2930,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       if (!root || bookmarkRequests.current.has(el)) return;
       bookmarkRequests.current.add(el);
       try {
-        const existing = bookmarkMarking(root, el, bookmarkMarkers);
+        const existing = bookmarkMarking(root, el, ownBookmarkMarkers);
         if (existing) {
           await onDeleteThread(existing.threadId);
           return;
@@ -2950,7 +2953,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         bookmarkRequests.current.delete(el);
       }
     },
-    [bookmarkMarkers, doc.uid, landThread, onDeleteThread, reconcileThreadsSoon, resolveIdentity],
+    [
+      ownBookmarkMarkers,
+      doc.uid,
+      landThread,
+      onDeleteThread,
+      reconcileThreadsSoon,
+      resolveIdentity,
+    ],
   );
   // Other tabs of this browser share its client id, so neither the server
   // nor the realtime channel tells them that a thread bookmark changed.

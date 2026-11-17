@@ -177,6 +177,7 @@ describe('marginalia MCP server', () => {
     expect(names).toEqual(
       [
         'authenticate',
+        'create_bookmark',
         'create_comment',
         'create_document',
         'create_invite',
@@ -408,6 +409,105 @@ describe('marginalia MCP server', () => {
     expect(threads).toContain('COMMENT THREAD 1/1 — open');
     expect(threads).toContain('How is this reconciled');
     expect(threads).toContain('Water rations');
+  });
+
+  test('bookmarks a passage for everyone, kept out of the review queues', async () => {
+    const { adminUrl, uid } = await seedBook();
+    const invite = await call('create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: REVIEWER.displayName,
+    });
+    const token = new URL(/(http\S+)/.exec(invite)?.[1] as string).pathname.split('/')[3] as string;
+
+    const created = await call('create_bookmark', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      label: 'Arrival',
+    });
+    expect(created).toContain('Bookmarked block');
+    expect(created).toContain('visible to everyone');
+    const threadId = /^thread_id: (\S+)$/m.exec(created)?.[1] as string;
+    expect(threadId).toBeTruthy();
+
+    // The reviewer sees it, signed by the agent and shared.
+    const res = await fetch(`${baseUrl}/api/documents/${uid}/threads`, {
+      headers: {
+        'x-marginalia-client': REVIEWER.clientId,
+        'x-marginalia-client-name': REVIEWER.displayName,
+        'x-marginalia-invite': token,
+      },
+    });
+    const listed = (await res.json()) as {
+      threads: Array<{
+        id: string;
+        bookmark?: boolean;
+        anchor: { block_id: string };
+        comments: Array<{ hidden?: boolean; body: string; author: { display_name: string } }>;
+      }>;
+    };
+    expect(listed.threads.map((t) => [t.id, t.bookmark, t.comments[0]?.hidden])).toEqual([
+      [threadId, true, false],
+    ]);
+    expect(listed.threads[0]?.comments[0]?.body).toBe('Arrival');
+    expect(listed.threads[0]?.comments[0]?.author.display_name).toBe('Claude');
+
+    // A reviewer's own shared bookmark is not a request waiting on the agent.
+    const reviewerBookmark = await fetch(`${baseUrl}/api/documents/${uid}/threads`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-marginalia-client': REVIEWER.clientId,
+        'x-marginalia-client-name': REVIEWER.displayName,
+        'x-marginalia-invite': token,
+      },
+      body: JSON.stringify({
+        anchor: { block_id: listed.threads[0]?.anchor.block_id, quote: 'They reached' },
+        bookmark: true,
+        hidden: false,
+      }),
+    });
+    expect(reviewerBookmark.status).toBe(201);
+
+    const review = await call('list_threads', { document: adminUrl });
+    expect(review).toContain('2 bookmark(s), listed with kind="bookmarks"');
+    expect(review).toContain('No threads matched.');
+    const queue = await call('list_threads', { document: adminUrl, awaiting_my_response: true });
+    expect(queue).toContain('No threads matched.');
+
+    const bookmarks = await call('list_threads', { document: adminUrl, kind: 'bookmarks' });
+    expect(bookmarks).toContain('=== BOOKMARK 1/2 — shared ===');
+    expect(bookmarks).toContain('bookmarked by Claude');
+    expect(bookmarks).toContain('label: "Arrival"');
+    expect(bookmarks).toContain('bookmarked by Paul');
+    expect(bookmarks).toContain('label: (none)');
+    expect(bookmarks).toContain('They reached the well on the fourth evening');
+
+    // Asking again relabels the bookmark already there instead of adding one.
+    const again = await call('create_bookmark', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      label: 'The well',
+    });
+    expect(again).toContain('Updated your existing bookmark');
+    expect(again).toContain(`thread_id: ${threadId}`);
+    expect(again).toContain('label: "The well"');
+    const same = await call('create_bookmark', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+    });
+    expect(same).toContain('nothing changed');
+
+    await call('edit_comment', {
+      document: adminUrl,
+      thread_id: threadId,
+      comment_id: threadId,
+      body: '',
+    });
+    await call('delete_thread', { document: adminUrl, thread_id: threadId });
+    const after = await call('list_threads', { document: adminUrl, kind: 'bookmarks' });
+    expect(after).toContain('=== BOOKMARK 1/1 — shared ===');
+    expect(after).toContain('bookmarked by Paul');
   });
 
   test('reads surrounding paragraphs by default for one thread, but not a thread list', async () => {

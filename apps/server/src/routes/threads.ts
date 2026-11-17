@@ -340,10 +340,9 @@ async function createThread(c: Context, deps: AppDeps) {
   }
   const bookmark = body.bookmark === true;
   if (bookmark && proposal) return c.json({ error: 'bookmark-proposal-forbidden' }, 400);
-  // A bookmark is a place a reader marked, not something they said, and it
-  // is private whatever the request asked for — nobody else's pane, feed or
-  // realtime channel has any use for it.
-  const hidden = bookmark || body.hidden === true;
+  // A bookmark is private unless its author explicitly shares it: clients
+  // that predate shared bookmarks send no `hidden` and mean "only me".
+  const hidden = bookmark ? body.hidden !== false : body.hidden === true;
   if (hidden && proposal) return c.json({ error: 'hidden-proposal-forbidden' }, 400);
   const storedRootBody = proposal
     ? (rootBody.body ?? DEFAULT_PROPOSAL_BODY)
@@ -387,7 +386,7 @@ async function createThread(c: Context, deps: AppDeps) {
     const existingRow = existing ? loadThreadRow(db, existing.id, doc.uid) : undefined;
     if (existingRow) {
       const thread = await toThreadWire(db, store, doc, existingRow, [], decision, new Set());
-      return c.json({ thread }, 200);
+      return c.json({ thread, existing: true }, 200);
     }
   }
 
@@ -506,9 +505,11 @@ async function createThread(c: Context, deps: AppDeps) {
   if (!root) return c.json({ error: 'not-found' }, 404);
   const thread = await toThreadWire(db, store, doc, root, [], decision, new Set<string>());
   const rootComment = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
-  const mentionTargets = hidden
-    ? []
-    : storeMentionsForComment(db, doc.uid, id, rootComment.body, rootComment.author_display_name);
+  // A bookmark's label names a place; it is not addressed to anyone.
+  const mentionTargets =
+    hidden || bookmark
+      ? []
+      : storeMentionsForComment(db, doc.uid, id, rootComment.body, rootComment.author_display_name);
 
   if (hidden) {
     // Private threads never enter the document-wide realtime channel.
@@ -835,9 +836,6 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (nextHidden !== undefined && isProposalRow(row)) {
     return c.json({ error: 'hidden-proposal-forbidden' }, 400);
   }
-  if (row.is_bookmark === 1 && nextHidden !== undefined) {
-    return c.json({ error: 'bookmark-always-hidden' }, 400);
-  }
   if (nextHidden !== undefined && !isAuthor) return c.json({ error: 'forbidden' }, 403);
   if (!(nextHidden ?? row.is_hidden === 1) && needsName(decision)) return nameRequired(c);
   const parsedComment = parseOptionalBody(body.comment);
@@ -1000,7 +998,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const updated = loadThreadRow(db, tid, doc.uid);
   if (!updated) return c.json({ error: 'not-found' }, 404);
   const mentionTargets =
-    next.body !== undefined && updated.is_hidden === 0
+    next.body !== undefined && updated.is_hidden === 0 && updated.is_bookmark === 0
       ? storeMentionsForComment(db, doc.uid, updated.id, updated.body, updated.author_display_name)
       : [];
 
@@ -3037,7 +3035,7 @@ async function toThreadWire(
         capabilities: {
           edit: canRootEdit,
           delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
-          hide: !proposal && row.is_bookmark === 0 && isRootAuthor,
+          hide: !proposal && isRootAuthor,
           react: canReply,
         },
         reactions: reactionsByComment.get(row.id) ?? [],

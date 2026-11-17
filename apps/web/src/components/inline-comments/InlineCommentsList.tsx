@@ -550,11 +550,13 @@ export function InlineCommentsList({
         <BookmarkCard
           key={thread.id}
           thread={thread}
+          own={thread.comments[0].author.client_id === viewerClientId}
           focused={focusedId === thread.id}
           flashPhase={flash?.id === thread.id ? flash.phase : null}
           onJump={onJump}
           onRemove={onDeleteThread}
           onEditLabel={onEdit}
+          onSetHidden={onSetHidden}
         />
       );
     }

@@ -341,6 +341,7 @@ export function threadDetail(
   options: ThreadListOptions,
   ledger: SectionLedger = newSectionLedger(),
 ): string {
+  if (thread.bookmark) return bookmarkDetail(thread, position, total, options);
   const kind = thread.proposal ? 'EDIT PROPOSAL' : 'COMMENT THREAD';
   const status = threadStatus(thread);
   const lines: string[] = [];
@@ -450,6 +451,51 @@ export function threadDetail(
     );
   }
 
+  return lines.join('\n');
+}
+
+/**
+ * A bookmark has no discussion to print: who marked which block, and the
+ * label they gave it.
+ */
+function bookmarkDetail(
+  thread: ThreadWire,
+  position: number,
+  total: number,
+  options: ThreadListOptions,
+): string {
+  const root = thread.comments[0];
+  const anchor = thread.anchor;
+  const { block } = options.blockMap ? anchorBlocks(options.blockMap, anchor) : { block: null };
+  const where = block
+    ? `${blockSpan(block, null, false)}, section ${
+        block.headingPath.length > 0 ? block.headingPath.join(' › ') : '(document root)'
+      }`
+    : anchor.heading_path?.length
+      ? `section ${anchor.heading_path.join(' › ')}`
+      : 'unknown location';
+  const lines = [
+    `=== BOOKMARK ${position}/${total} — ${root?.hidden ? 'private' : 'shared'} ===`,
+    `thread_id: ${thread.id}`,
+    `url: ${commentUrl(options.ref, thread.id)}`,
+    `anchor: block_id=${anchor.block_id ?? 'none'}${block ? occurrenceTag(block) : ''} (${where}) link_status=${thread.link_status}`,
+  ];
+  if (root) {
+    lines.push(
+      `bookmarked by ${root.author.display_name} · ${timestamp(root.created_at)}${changeNote(root)}`,
+    );
+    lines.push(root.body.trim() ? `label: ${JSON.stringify(root.body.trim())}` : 'label: (none)');
+  }
+  if (anchor.quote) lines.push(`marked text: ${JSON.stringify(clip(anchor.quote, 240))}`);
+  lines.push(`you can: ${enabledCapabilities(thread)}`);
+  const around =
+    options.context !== 'none' && options.blockMap && block
+      ? anchorNeighbourhood(options.blockMap, block, null, 0)
+      : null;
+  if (around) {
+    lines.push('current source of the bookmarked block:');
+    lines.push(gutter(around.anchored));
+  }
   return lines.join('\n');
 }
 

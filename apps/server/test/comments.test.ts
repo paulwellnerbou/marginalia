@@ -291,7 +291,7 @@ describe('threads API', () => {
     expect(comments[1]!.anchor).toBeNull();
   });
 
-  test('a bookmark is a flagged, private thread with no body, kept out of the thread counts', async () => {
+  test('a bookmark is a flagged thread with no body, private by default, kept out of the thread counts', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
 
@@ -299,12 +299,7 @@ describe('threads API', () => {
       new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headersFor(ALICE),
-        // `hidden: false` is ignored: a bookmark is its author's alone.
-        body: JSON.stringify({
-          anchor: { block_id: blockId, quote: 'Title' },
-          bookmark: true,
-          hidden: false,
-        }),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
       }),
     );
     expect(res.status).toBe(201);
@@ -314,8 +309,8 @@ describe('threads API', () => {
     expect(thread.comments).toHaveLength(1);
     expect(thread.comments[0].body).toBe('');
     expect(thread.comments[0].hidden).toBe(true);
-    // Nothing to offer: a bookmark cannot be made public.
-    expect(thread.comments[0].capabilities.hide).toBe(false);
+    // Its author may share it.
+    expect(thread.comments[0].capabilities.hide).toBe(true);
 
     const aliceList = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads?state=all`, {
@@ -383,7 +378,7 @@ describe('threads API', () => {
     expect(((await comment.json()) as { thread: ThreadShape }).thread.bookmark).toBe(false);
   });
 
-  test('editing a bookmark sets and clears its label but cannot make it public', async () => {
+  test('editing a bookmark sets and clears its label and shares it or takes it back', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
     const created = await app.hono.fetch(
@@ -403,9 +398,23 @@ describe('threads API', () => {
         }),
       );
 
-    const unhide = await patch({ hidden: false });
-    expect(unhide.status).toBe(400);
-    expect(((await unhide.json()) as { error: string }).error).toBe('bookmark-always-hidden');
+    const bobSees = async () => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+          headers: headersFor(BOB),
+        }),
+      );
+      return ((await res.json()) as { threads: ThreadShape[] }).threads.map((t) => t.id);
+    };
+    const shared = await patch({ hidden: false });
+    expect(shared.status).toBe(200);
+    expect(((await shared.json()) as { thread: ThreadShape }).thread.comments[0].hidden).toBe(
+      false,
+    );
+    expect(await bobSees()).toEqual([thread.id]);
+    const unshared = await patch({ hidden: true });
+    expect(unshared.status).toBe(200);
+    expect(await bobSees()).toEqual([]);
 
     expect(thread.comments[0].capabilities.edit).toBe(true);
     const label = await patch({ body: 'Chapter two starts here' });
@@ -414,7 +423,7 @@ describe('threads API', () => {
     expect(labelled.bookmark).toBe(true);
     expect(labelled.comments[0].body).toBe('Chapter two starts here');
     expect(labelled.comments[0].hidden).toBe(true);
-    expect(labelled.comments[0].capabilities.hide).toBe(false);
+    expect(labelled.comments[0].capabilities.hide).toBe(true);
 
     const cleared = await patch({ body: '' });
     expect(cleared.status).toBe(200);
@@ -433,6 +442,95 @@ describe('threads API', () => {
       }),
     );
     expect(bobLabel.status).toBe(404);
+  });
+
+  test('a shared bookmark is seen by everyone, owned by its author and still no discussion', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          bookmark: true,
+          hidden: false,
+          body: 'Ask @Bob about this',
+        }),
+      }),
+    );
+    expect(created.status).toBe(201);
+    const { thread } = (await created.json()) as { thread: ThreadShape };
+    expect(thread.bookmark).toBe(true);
+    expect(thread.comments[0].hidden).toBe(false);
+
+    const bobRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    const bobBody = (await bobRes.json()) as {
+      threads: ThreadShape[];
+      counts: { total: number };
+      pending_mentions: string[];
+    };
+    expect(bobBody.threads.map((t) => t.id)).toEqual([thread.id]);
+    const seen = bobBody.threads[0]!;
+    expect(seen.bookmark).toBe(true);
+    expect(seen.comments[0].body).toBe('Ask @Bob about this');
+    expect(seen.comments[0].author.display_name).toBe('Alice');
+    expect(seen.comments[0].capabilities).toMatchObject({
+      edit: false,
+      delete: false,
+      hide: false,
+      react: false,
+    });
+    expect(seen.capabilities.reply).toBe(false);
+    // A label is not addressed to anyone, and a bookmark is not a thread.
+    expect(bobBody.pending_mentions).toEqual([]);
+    expect(bobBody.counts.total).toBe(0);
+
+    // Bob's own bookmark on the same passage is a separate one.
+    const bobs = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+      }),
+    );
+    expect(bobs.status).toBe(201);
+
+    // Asking again for Alice's gives hers back, flagged as already there.
+    const again = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          bookmark: true,
+          hidden: false,
+        }),
+      }),
+    );
+    expect(again.status).toBe(200);
+    expect(await again.json()).toMatchObject({ existing: true, thread: { id: thread.id } });
+
+    // An admin may take down a shared bookmark, as any visible comment.
+    const adminView = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${thread.id}`, {
+        headers: asAdmin(CAROL),
+      }),
+    );
+    const adminThread = ((await adminView.json()) as { threads: ThreadShape[] }).threads[0]!;
+    expect(adminThread.comments[0].capabilities.delete).toBe(true);
+    const removed = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}`, {
+        method: 'DELETE',
+        headers: asAdmin(CAROL),
+      }),
+    );
+    expect(removed.status).toBeLessThan(300);
+    expect((await list(uid, BOB)).map((t) => t.id)).not.toContain(thread.id);
   });
 
   test('a reader cannot bookmark, for the same reason they cannot comment', async () => {
@@ -2736,7 +2834,7 @@ describe('threads API', () => {
     return { bundle, serialized, imported, headers };
   }
 
-  test('a bookmark comes back from an export and import as a private bookmark, label and all', async () => {
+  test('a bookmark comes back from an export and import as a bookmark, label and privacy and all', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
     const created = await app.hono.fetch(
@@ -2763,8 +2861,8 @@ describe('threads API', () => {
       [true, true, 'Read first'],
     ]);
 
-    // A hand-edited bundle cannot turn a bookmark into something else: the
-    // flag brings its privacy with it, and leaves any proposal behind.
+    // A hand-edited bundle cannot turn a bookmark into a proposal. Sharing it
+    // is its author's to choose, and the bundle carries that choice.
     rows[0]!.is_hidden = false;
     rows[0]!.edit_proposal = { proposed_text: '# Other title', status: 'open' };
     const importRes = await app.hono.fetch(
@@ -2784,7 +2882,7 @@ describe('threads API', () => {
     const { threads } = (await listRes.json()) as { threads: ThreadShape[] };
     expect(
       threads.map((t) => [t.bookmark, t.comments[0].hidden, t.comments[0].body, t.proposal]),
-    ).toEqual([[true, true, 'Read first', null]]);
+    ).toEqual([[true, false, 'Read first', null]]);
   });
 
   /**
