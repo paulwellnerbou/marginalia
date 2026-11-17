@@ -77,6 +77,18 @@ test('only anchored bookmarks get a marker, carrying the section that picks thei
         section_index: 2,
         section_index_path: [0, 2],
       },
+      own: true,
     },
+  ]);
+});
+
+test('a bookmark someone else shared is marked as theirs', () => {
+  const shared = thread('s', 'Key passage', bookmark);
+  shared.comments[0].author = { client_id: 'client-ada', display_name: 'Ada' };
+  shared.comments[0].capabilities = { edit: false, delete: false, react: false };
+  const specs = bookmarkMarkerSpecs([shared, thread('b', '', bookmark)]);
+  expect(specs.map((s) => [s.threadId, s.own])).toEqual([
+    ['s', false],
+    ['b', true],
   ]);
 });

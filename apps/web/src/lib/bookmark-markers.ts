@@ -1,6 +1,6 @@
 /**
- * Where the reader's bookmarks sit in the rendered document, and the small
- * ribbon each bookmarked block carries.
+ * Where bookmarks sit in the rendered document — the reader's own and the
+ * ones others shared — and the small ribbon each bookmarked block carries.
  *
  * The ribbon is a real element rather than a `::before`/`::after`: themes
  * already spend those on blocks (beautiful.css draws a blockquote's opening
@@ -25,11 +25,16 @@ const BOOKMARK_MARKER_TAG = 'marginalia-bookmark';
 /** Set on a block carrying a marker, so the stylesheet can position it. */
 const BOOKMARKED_ATTR = 'data-bookmarked';
 
+/** Set on a marker for a block only other people bookmarked, which draws it hollow. */
+const OTHERS_ATTR = 'data-others';
+
 export interface BookmarkMarkerSpec {
   threadId: string;
   blockId: string;
   quote: string | null;
   section: AnchorSection;
+  /** Made by the viewer, rather than shared by someone else. */
+  own: boolean;
 }
 
 /**
@@ -50,9 +55,19 @@ export function bookmarkMarkerSpecs(threads: readonly Thread[]): BookmarkMarkerS
         section_index: t.anchor.section_index,
         section_index_path: t.anchor.section_index_path,
       },
+      own: isOwnBookmark(t),
     });
   }
   return specs;
+}
+
+/**
+ * Whether the viewer made this bookmark. Read from the server's answer, not
+ * a client-id comparison: only a bookmark's author may edit its label, and
+ * the server knows which id this device writes under after pairing.
+ */
+export function isOwnBookmark(t: Thread): boolean {
+  return t.comments[0].capabilities.edit;
 }
 
 /**
@@ -84,15 +99,19 @@ const RIBBON_SVG =
  * blocks whose state changes. The document is watched by mutation
  * observers that re-lay out comment cards and pages on any child-list
  * change, so an unchanged set must not remove and re-add anything.
+ *
+ * One ribbon per block however many people marked it: the reader's own
+ * when they have one there, a hollow one when only others do.
  */
 export function syncBookmarkMarkers(
   root: HTMLElement,
   bookmarks: readonly BookmarkMarkerSpec[],
 ): void {
-  const wanted = new Set<HTMLElement>();
+  // Block → whether one of the bookmarks on it is the viewer's.
+  const wanted = new Map<HTMLElement, boolean>();
   for (const b of bookmarks) {
     const el = resolveAnchorElement(root, b.blockId, b.quote, b.section);
-    if (el) wanted.add(el);
+    if (el) wanted.set(el, b.own || wanted.get(el) === true);
   }
 
   const marked = new Set<HTMLElement>();
@@ -100,18 +119,26 @@ export function syncBookmarkMarkers(
     const host = marker.parentElement;
     if (host && wanted.has(host) && !marked.has(host)) {
       marked.add(host);
+      markOthers(marker, !wanted.get(host));
       continue;
     }
     marker.remove();
     if (host && !wanted.has(host)) host.removeAttribute(BOOKMARKED_ATTR);
   }
 
-  for (const host of wanted) {
+  for (const [host, own] of wanted) {
     if (marked.has(host)) continue;
     const marker = document.createElement(BOOKMARK_MARKER_TAG);
     marker.setAttribute('aria-hidden', 'true');
+    markOthers(marker, !own);
     marker.innerHTML = RIBBON_SVG;
     host.setAttribute(BOOKMARKED_ATTR, 'true');
     host.append(marker);
   }
+}
+
+function markOthers(marker: HTMLElement, others: boolean): void {
+  if (others === marker.hasAttribute(OTHERS_ATTR)) return;
+  if (others) marker.setAttribute(OTHERS_ATTR, 'true');
+  else marker.removeAttribute(OTHERS_ATTR);
 }

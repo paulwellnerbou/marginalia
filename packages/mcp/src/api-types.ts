@@ -132,6 +132,11 @@ export interface ThreadWire {
   };
   /** Edit proposals written to answer this thread, oldest first. */
   answered_by_thread_ids: string[];
+  /**
+   * A passage bookmark rather than a discussion: no replies, and the
+   * opener's body is its optional label. Absent from older instances.
+   */
+  bookmark?: boolean;
   proposal: {
     source_snapshot: string | null;
     proposed_text: string | null;
