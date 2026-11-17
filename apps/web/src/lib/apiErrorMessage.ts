@@ -94,6 +94,7 @@ const MESSAGES: Record<string, string> = {
   'body-required': 'Write something first.',
   'empty-response': 'Write a reply or pick an action first.',
   'invalid-body': 'The server rejected that input.',
+  'bookmark-label-too-long': 'A bookmark label can be at most 200 characters.',
   'invalid-emoji': 'That is not a supported reaction.',
   'source-required': 'The document cannot be saved empty.',
   'plain-edit-required':

@@ -49,6 +49,12 @@ import {
 
 type ThreadStateFilter = 'open' | 'resolved' | 'all';
 
+interface BookmarkMutationWire {
+  thread: ThreadWire;
+  /** The server answered with the bookmark already on that passage. */
+  existing?: boolean;
+}
+
 interface ThreadMutationWire {
   thread: ThreadWire;
   created_reply_id?: string | null;
@@ -109,6 +115,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'state="all" only when the question really is about the whole history.\n\n' +
         'Comments and the proposals written to answer them are shown linked in both ' +
         'directions. `needs_proposal: true` lists the comments still waiting for one.\n\n' +
+        'Bookmarks — passages readers marked and shared, each with an optional label — are not ' +
+        'review threads and are left out unless `kind` is "bookmarks"; the header counts them.\n\n' +
         'To catch up on what changed — new threads, replies, edited messages, resolutions — ' +
         'pass `since`; `sort: "recent"` puts the latest activity first. Each message shows ' +
         'when it was created, edited (and by whom) and otherwise updated.',
@@ -121,7 +129,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             'Default "open", or "all" when `since` is given. "resolved" covers resolved ' +
               'comments and accepted/rejected proposals. Ignored when thread_id names a thread.',
           ),
-        kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
+        kind: z
+          .enum(['all', 'comments', 'proposals', 'bookmarks'])
+          .optional()
+          .describe(
+            'Default "all": comment threads and edit proposals. "bookmarks" lists the shared ' +
+              'bookmarks instead (and your own), which no other kind includes — except a ' +
+              'bookmark named by thread_id, which is shown whatever the kind.',
+          ),
         thread_id: z
           .string()
           .trim()
@@ -258,6 +273,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               : startsWithPath(t.anchor.heading_path, section.path);
           });
         }
+        // A bookmark is nobody's request, so it stays out of every review
+        // queue — but a thread named by id comes back whatever it is.
+        if (args.kind === 'bookmarks') threads = threads.filter((t) => t.bookmark === true);
+        else if (targetId === null) threads = threads.filter((t) => t.bookmark !== true);
         if (args.kind === 'comments') threads = threads.filter((t) => t.proposal === null);
         if (args.kind === 'proposals') threads = threads.filter((t) => t.proposal !== null);
         // The server already filtered by state — repeated here only so an
@@ -386,6 +405,93 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           `url: ${commentUrl(loaded.ref, thread.id)}`,
           `highlighted: ${JSON.stringify(anchor.quote.slice(0, 200))}`,
           quoteChoiceNote(block, anchor, args.quote_occurrence),
+        );
+      }),
+  );
+
+  server.registerTool(
+    'create_bookmark',
+    {
+      title: 'Bookmark a passage for everyone',
+      description:
+        'Mark a block with a shared bookmark: a ribbon beside it in the viewer and an entry ' +
+        'in every reader’s Bookmarks tab, signed with this server’s display name. It is a ' +
+        'signpost, not a discussion — nobody can reply to it and it asks nothing of anyone — so ' +
+        'use it to point readers at key passages ("Start here", "Definition of X", "Open ' +
+        'question"). To raise something that needs an answer use create_comment instead.\n\n' +
+        'One bookmark per block: bookmarking a block you already marked returns that bookmark. ' +
+        'Change its label with edit_comment (an empty body clears it) and remove it with ' +
+        'delete_thread. List bookmarks with list_threads kind="bookmarks".',
+      inputSchema: {
+        document: documentArg,
+        label: z
+          .string()
+          .trim()
+          .max(200)
+          .optional()
+          .describe(
+            'Short name for the place, shown instead of the quoted text. Plain text, up to ' +
+              '200 characters. Omit for an unlabelled bookmark.',
+          ),
+        block_id: blockIdArg,
+        occurrence: occurrenceArg,
+        anchor_text: anchorTextArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) =>
+      guard(async () => {
+        const loaded = await loadDocument(ctx, args.document);
+        const block = resolveBlock(loaded.blocks, {
+          blockId: args.block_id,
+          anchorText: args.anchor_text,
+          occurrence: args.occurrence,
+        });
+        // A bookmark marks the whole block, as the viewer's Bookmark button does.
+        const anchor = buildAnchor(block, undefined);
+        const created = await ctx.client.json<BookmarkMutationWire>(
+          loaded.ref,
+          `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads`,
+          {
+            method: 'POST',
+            body: {
+              anchor,
+              bookmark: true,
+              hidden: false,
+              ...(args.label ? { body: args.label } : {}),
+            },
+          },
+        );
+        let thread = created.thread;
+        // The bookmark already there may be private or labelled otherwise;
+        // asking again for a shared, labelled one means "make it that".
+        const before = thread.comments[0];
+        const change: { hidden?: false; body?: string } = {};
+        if (created.existing && before?.hidden) change.hidden = false;
+        if (created.existing && args.label && args.label !== before?.body.trim()) {
+          change.body = args.label;
+        }
+        if (Object.keys(change).length > 0) {
+          thread = (
+            await ctx.client.json<ThreadMutationWire>(
+              loaded.ref,
+              `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(thread.id)}`,
+              { method: 'PATCH', body: change },
+            )
+          ).thread;
+        }
+        const label = thread.comments[0]?.body.trim() ?? '';
+        const where = `block ${block.id}${occurrenceTag(block)} (${block.kind}, lines ${block.startLine}-${block.endLine})`;
+        const summary = !created.existing
+          ? `Bookmarked ${where} as "${ctx.client.displayName}", visible to everyone with access.`
+          : Object.keys(change).length > 0
+            ? `Updated your existing bookmark on ${where}; it is visible to everyone with access.`
+            : `You had already bookmarked ${where}; nothing changed.`;
+        return text(
+          summary,
+          `thread_id: ${thread.id}`,
+          `url: ${commentUrl(loaded.ref, thread.id)}`,
+          `label: ${label ? JSON.stringify(label) : '(none)'}`,
         );
       }),
   );
@@ -828,7 +934,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
       title: 'Edit one of your own comments',
       description:
         'Rewrite the body of a comment you authored — the opener of a thread or any reply. ' +
-        'Comments by other people cannot be edited.',
+        'Comments by other people cannot be edited. On a bookmark, the body is its label, and ' +
+        'an empty one clears it.',
       inputSchema: {
         document: documentArg,
         thread_id: z.string().describe('Thread the comment belongs to.'),
@@ -861,9 +968,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     'delete_thread',
     {
-      title: 'Delete a comment, reply, or proposal',
+      title: 'Delete a comment, reply, proposal or bookmark',
       description:
-        'Permanently remove a thread you opened (or a single reply of yours). Deleting a ' +
+        'Permanently remove a thread or bookmark you made (or a single reply of yours). Deleting a ' +
         'thread removes its replies too. Prefer resolving or rejecting over deleting — those ' +
         'keep the discussion visible — and prefer update_proposal over delete + re-create ' +
         'when only a proposal’s text needs to change.',
@@ -1279,7 +1386,9 @@ function hiddenThreadsNote(
   );
 }
 
-function summarize(threads: ThreadWire[]): string {
+function summarize(all: ThreadWire[]): string {
+  const bookmarks = all.filter((t) => t.bookmark === true).length;
+  const threads = all.filter((t) => t.bookmark !== true);
   const comments = threads.filter((t) => t.proposal === null);
   const proposals = threads.filter((t) => t.proposal !== null);
   const openComments = comments.filter((t) => t.state === 'open').length;
@@ -1291,7 +1400,8 @@ function summarize(threads: ThreadWire[]): string {
   return (
     `${comments.length} comment thread(s) (${openComments} open, ${needProposal} with no ` +
     `proposal yet), ${proposals.length} edit proposal(s) (${openProposals} open)` +
-    (orphaned > 0 ? `, ${orphaned} with a lost anchor` : '')
+    (orphaned > 0 ? `, ${orphaned} with a lost anchor` : '') +
+    (bookmarks > 0 ? `; ${bookmarks} bookmark(s), listed with kind="bookmarks"` : '')
   );
 }
 

@@ -155,6 +155,52 @@ describe('realtime events', () => {
     ws.close();
   });
 
+  test('a bookmark reaches other subscribers only while it is shared', async () => {
+    const uid = await uploadDoc('# Hi');
+    const blockId = await firstBlockId(uid);
+    const { ws, events } = await openSocket(uid, BOB.id);
+    await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));
+    const ofType = (type: string) => events.filter((e) => (e as { type: string }).type === type);
+
+    const post = (hidden: boolean | undefined, quote: string) =>
+      fetch(url(`/api/documents/${uid}/threads`), {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote },
+          bookmark: true,
+          ...(hidden === undefined ? {} : { hidden }),
+        }),
+      });
+
+    // A private bookmark never enters the document channel.
+    const privateRes = await post(undefined, 'Hi');
+    expect(privateRes.status).toBe(201);
+    const privateId = ((await privateRes.json()) as { thread: { id: string } }).thread.id;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(ofType('comment.created')).toHaveLength(0);
+
+    const patch = (hidden: boolean) =>
+      fetch(url(`/api/documents/${uid}/threads/${privateId}`), {
+        method: 'PATCH',
+        headers: asAdmin(),
+        body: JSON.stringify({ hidden }),
+      });
+
+    // Sharing it announces it; taking it back withdraws it.
+    expect((await patch(false)).status).toBe(200);
+    const shared = (await waitFor(() => ofType('comment.created')[0])) as {
+      comment: { id: string };
+    };
+    expect(shared.comment.id).toBe(privateId);
+    expect((await patch(true)).status).toBe(200);
+    const withdrawn = (await waitFor(() => ofType('comment.deleted')[0])) as {
+      comment_id: string;
+    };
+    expect(withdrawn.comment_id).toBe(privateId);
+    ws.close();
+  });
+
   test('sender does NOT receive their own event', async () => {
     const uid = await uploadDoc('# Hi');
     const blockId = await firstBlockId(uid);

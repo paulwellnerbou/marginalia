@@ -1,4 +1,6 @@
-import { BookmarkFilledIcon, Cross2Icon, Pencil1Icon } from '@radix-ui/react-icons';
+import { BookmarkFilledIcon, BookmarkIcon, Cross2Icon, Pencil1Icon } from '@radix-ui/react-icons';
+import { Tooltip } from '@radix-ui/themes';
+import { Eye, EyeOff } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Thread } from '../../lib/api.js';
@@ -9,30 +11,37 @@ const BOOKMARK_LABEL_MAX_LENGTH = 200;
 
 interface Props {
   thread: Thread;
+  /** Made by the viewer, rather than shared with them by someone else. */
+  own: boolean;
   focused: boolean;
   flashPhase: 'a' | 'b' | null;
   onJump?: (() => void) | undefined;
   onRemove: (threadId: string) => Promise<void>;
   /** Resolves `false` when the save failed, so the field keeps the draft. */
   onEditLabel: (commentId: string, label: string) => Promise<boolean | void>;
+  onSetHidden: (commentId: string, hidden: boolean) => Promise<void>;
 }
 
 /**
- * A bookmark in the Bookmarks tab. It has no author line or replies, so
- * none of a thread card's machinery applies — only the passage it marks,
- * the reader's optional label, when it was made, and a way to drop it. It
- * keeps the thread card's `data-comment-thread-id` and focus/flash
- * classes, which is what the list's focus handling scrolls to and lights up.
+ * A bookmark in the Bookmarks tab. It has no replies, so none of a thread
+ * card's machinery applies — only the passage it marks, the optional label,
+ * when it was made, whether it is shared, and a way to drop it. Someone
+ * else's shared bookmark also names who made it. It keeps the thread card's
+ * `data-comment-thread-id` and focus/flash classes, which is what the
+ * list's focus handling scrolls to and lights up.
  */
 export function BookmarkCard({
   thread,
+  own,
   focused,
   flashPhase,
   onJump,
   onRemove,
   onEditLabel,
+  onSetHidden,
 }: Props) {
   const [removing, setRemoving] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Blur also saves, and disabling the field mid-save or unmounting it
@@ -50,6 +59,17 @@ export function BookmarkCard({
   ]
     .filter(Boolean)
     .join(' ');
+
+  const shared = root.hidden !== true;
+
+  async function toggleShared() {
+    setSharing(true);
+    try {
+      await onSetHidden(root.id, shared);
+    } finally {
+      setSharing(false);
+    }
+  }
 
   async function remove() {
     setRemoving(true);
@@ -92,7 +112,11 @@ export function BookmarkCard({
 
   return (
     <article className={classes} data-comment-thread-id={thread.id} tabIndex={-1}>
-      <BookmarkFilledIcon className="ic-bookmark-card-icon" aria-hidden />
+      {own ? (
+        <BookmarkFilledIcon className="ic-bookmark-card-icon" aria-hidden />
+      ) : (
+        <BookmarkIcon className="ic-bookmark-card-icon" aria-hidden />
+      )}
       <div className="ic-bookmark-card-main">
         {draft !== null ? (
           <input
@@ -135,10 +159,36 @@ export function BookmarkCard({
             {quoteText}
           </span>
         )}
-        <span className="ic-row-ts" title={formatTimestampLong(root.created_at)}>
-          {formatTimestamp(root.created_at)}
+        <span className="ic-bookmark-card-meta">
+          {!own && <span className="ic-bookmark-card-author">{root.author.display_name}</span>}
+          <span className="ic-row-ts" title={formatTimestampLong(root.created_at)}>
+            {formatTimestamp(root.created_at)}
+          </span>
+          {own && shared && <span className="ic-bookmark-card-shared">Shared</span>}
         </span>
       </div>
+      {root.capabilities.hide === true && draft === null && (
+        <Tooltip
+          content={
+            shared
+              ? 'Everyone with access can see this bookmark. Click to keep it to yourself'
+              : 'Only you can see this bookmark. Click to share it'
+          }
+        >
+          <button
+            type="button"
+            className={`ic-icon-btn ic-icon-btn-visibility${
+              shared ? '' : ' ic-icon-btn-visibility-active'
+            }`}
+            disabled={sharing}
+            aria-pressed={shared}
+            aria-label={shared ? 'Make bookmark private' : 'Share bookmark'}
+            onClick={() => void toggleShared()}
+          >
+            {shared ? <Eye strokeWidth={2.25} /> : <EyeOff strokeWidth={2.25} />}
+          </button>
+        </Tooltip>
+      )}
       {root.capabilities.edit && draft === null && (
         <button
           type="button"
@@ -150,16 +200,18 @@ export function BookmarkCard({
           <Pencil1Icon />
         </button>
       )}
-      <button
-        type="button"
-        className="ic-icon-btn ic-icon-btn-danger"
-        onClick={() => void remove()}
-        disabled={removing}
-        title="Remove bookmark"
-        aria-label="Remove bookmark"
-      >
-        <Cross2Icon />
-      </button>
+      {root.capabilities.delete && (
+        <button
+          type="button"
+          className="ic-icon-btn ic-icon-btn-danger"
+          onClick={() => void remove()}
+          disabled={removing}
+          title={own ? 'Remove bookmark' : 'Remove this bookmark for everyone'}
+          aria-label={own ? 'Remove bookmark' : 'Remove this bookmark for everyone'}
+        >
+          <Cross2Icon />
+        </button>
+      )}
     </article>
   );
 }

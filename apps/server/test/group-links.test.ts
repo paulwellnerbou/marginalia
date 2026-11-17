@@ -427,6 +427,21 @@ describe('group links', () => {
         bookmark: true,
       });
       expect(bookmark.status).toBe(201);
+      const shared = await postThread(doc.uid, VISITOR, minted.token, blockId, {
+        body: undefined,
+        bookmark: true,
+        hidden: false,
+      });
+      expect(shared.json.error).toBe('display-name-required');
+      const share = await call(
+        `/api/documents/${doc.uid}/threads/${(bookmark.json.thread as { id: string }).id}`,
+        {
+          method: 'PATCH',
+          headers: headers(VISITOR, { token: minted.token }),
+          body: { hidden: false },
+        },
+      );
+      expect(share.json.error).toBe('display-name-required');
 
       // Making the private note public is gated like posting it.
       const hiddenId = (hidden.json.thread as { id: string }).id;
