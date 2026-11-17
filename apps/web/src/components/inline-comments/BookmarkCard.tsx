@@ -1,4 +1,5 @@
-import { BookmarkFilledIcon, Cross2Icon, Pencil1Icon } from '@radix-ui/react-icons';
+import { BookmarkFilledIcon, Cross2Icon, Pencil1Icon, TrashIcon } from '@radix-ui/react-icons';
+import { Tooltip } from '@radix-ui/themes';
 import { useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Thread } from '../../lib/api.js';
@@ -33,6 +34,7 @@ export function BookmarkCard({
   onEditLabel,
 }: Props) {
   const [removing, setRemoving] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Blur also saves, and disabling the field mid-save or unmounting it
@@ -57,6 +59,7 @@ export function BookmarkCard({
       await onRemove(thread.id);
     } finally {
       setRemoving(false);
+      setConfirmingRemove(false);
     }
   }
 
@@ -139,27 +142,58 @@ export function BookmarkCard({
           {formatTimestamp(root.created_at)}
         </span>
       </div>
-      {root.capabilities.edit && draft === null && (
-        <button
-          type="button"
-          className="ic-icon-btn"
-          onClick={startEditing}
-          title={label ? 'Edit label' : 'Add a label'}
-          aria-label={label ? 'Edit label' : 'Add a label'}
-        >
-          <Pencil1Icon />
-        </button>
-      )}
-      <button
-        type="button"
-        className="ic-icon-btn ic-icon-btn-danger"
-        onClick={() => void remove()}
-        disabled={removing}
-        title="Remove bookmark"
-        aria-label="Remove bookmark"
-      >
-        <Cross2Icon />
-      </button>
+      {draft === null &&
+        (confirmingRemove ? (
+          <>
+            <Tooltip content="Cancel">
+              <button
+                type="button"
+                className="ic-icon-btn"
+                onClick={() => setConfirmingRemove(false)}
+                disabled={removing}
+                aria-label="Cancel"
+              >
+                <Cross2Icon />
+              </button>
+            </Tooltip>
+            <Tooltip content="Confirm remove bookmark">
+              <button
+                type="button"
+                className="ic-icon-btn ic-icon-btn-danger"
+                onClick={() => void remove()}
+                disabled={removing}
+                aria-label="Confirm remove bookmark"
+              >
+                <TrashIcon />
+              </button>
+            </Tooltip>
+          </>
+        ) : (
+          <>
+            {root.capabilities.edit && (
+              <Tooltip content={label ? 'Edit label' : 'Add a label'}>
+                <button
+                  type="button"
+                  className="ic-icon-btn"
+                  onClick={startEditing}
+                  aria-label={label ? 'Edit label' : 'Add a label'}
+                >
+                  <Pencil1Icon />
+                </button>
+              </Tooltip>
+            )}
+            <Tooltip content="Remove bookmark">
+              <button
+                type="button"
+                className="ic-icon-btn ic-icon-btn-danger"
+                onClick={() => setConfirmingRemove(true)}
+                aria-label="Remove bookmark"
+              >
+                <TrashIcon />
+              </button>
+            </Tooltip>
+          </>
+        ))}
     </article>
   );
 }
