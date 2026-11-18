@@ -23,7 +23,7 @@ interface Props {
   /** Opens the editor on just the summary or about region the block sits in. */
   onEditDocMeta?: (kind: DocMetaKind) => void;
   /** The reader's bookmark on this block element, if it carries one. */
-  bookmarkOf?: (el: HTMLElement) => { label: string } | null;
+  bookmarkOf?: (el: HTMLElement) => { label: string; shared: boolean } | null;
   /** Adds the reader's bookmark to the block, or removes it. */
   onToggleBookmark?: (el: HTMLElement) => void;
 }
@@ -228,9 +228,10 @@ export function BlockActions({
   function toggleBookmark() {
     const el = targetElement();
     if (!el) return;
-    // A label is the reader's own writing; an unlabelled one costs a click
-    // to put back, so only the labelled one asks first.
-    if (bookmark?.label) {
+    // An unlabelled private bookmark costs a click to put back. A label is
+    // the reader's writing, and a re-added bookmark starts out private, so
+    // the others ask first.
+    if (bookmark && (bookmark.label || bookmark.shared)) {
       setConfirmingRemove(el);
       return;
     }
@@ -271,6 +272,9 @@ export function BlockActions({
   const bookmark = targetEl ? (bookmarkOf?.(targetEl) ?? null) : null;
   const bookmarked = bookmark !== null;
   const confirming = bookmarked && confirmingRemove !== null && confirmingRemove === targetEl;
+  const confirmRemoveLabel = bookmark?.shared
+    ? 'Confirm remove this bookmark for everyone'
+    : 'Confirm remove bookmark';
   // An AsciiDoc region is itself the block, a Markdown one wraps its blocks.
   const regionKind = renderedTarget.el.closest(`[${DOC_META_ATTR}]`)?.getAttribute(DOC_META_ATTR);
   const docMetaKind = onEditDocMeta && isDocMetaKind(regionKind) ? regionKind : null;
@@ -331,11 +335,11 @@ export function BlockActions({
               type="button"
               className="block-actions-btn block-actions-btn-danger"
               onClick={confirmRemoveBookmark}
-              title="Confirm remove bookmark"
-              aria-label="Confirm remove bookmark"
+              title={confirmRemoveLabel}
+              aria-label={confirmRemoveLabel}
             >
               <TrashIcon className="block-actions-icon" aria-hidden />
-              Remove bookmark
+              {bookmark?.shared ? 'Remove for everyone' : 'Remove bookmark'}
             </button>
           </>
         ) : (

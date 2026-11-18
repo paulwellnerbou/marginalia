@@ -2922,12 +2922,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   // somebody else shared on the same block is not theirs to take off.
   const ownBookmarkMarkers = useMemo(() => bookmarkMarkers.filter((b) => b.own), [bookmarkMarkers]);
   const blockBookmark = useCallback(
-    (el: HTMLElement): { label: string } | null => {
+    (el: HTMLElement): { label: string; shared: boolean } | null => {
       const root = docRef.current;
       const marking = root ? bookmarkMarking(root, el, ownBookmarkMarkers) : null;
       if (!marking) return null;
-      const thread = bookmarkThreads.find((t) => t.id === marking.threadId);
-      return { label: thread?.comments[0]?.body.trim() ?? '' };
+      const opener = bookmarkThreads.find((t) => t.id === marking.threadId)?.comments[0];
+      return { label: opener?.body.trim() ?? '', shared: opener ? opener.hidden !== true : false };
     },
     [ownBookmarkMarkers, bookmarkThreads],
   );
