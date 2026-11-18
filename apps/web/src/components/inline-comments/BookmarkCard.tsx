@@ -1,4 +1,10 @@
-import { BookmarkFilledIcon, BookmarkIcon, Cross2Icon, Pencil1Icon } from '@radix-ui/react-icons';
+import {
+  BookmarkFilledIcon,
+  BookmarkIcon,
+  Cross2Icon,
+  Pencil1Icon,
+  TrashIcon,
+} from '@radix-ui/react-icons';
 import { Tooltip } from '@radix-ui/themes';
 import { Eye, EyeOff } from 'lucide-react';
 import { useRef, useState } from 'react';
@@ -41,6 +47,7 @@ export function BookmarkCard({
   onSetHidden,
 }: Props) {
   const [removing, setRemoving] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -77,6 +84,7 @@ export function BookmarkCard({
       await onRemove(thread.id);
     } finally {
       setRemoving(false);
+      setConfirmingRemove(false);
     }
   }
 
@@ -107,6 +115,10 @@ export function BookmarkCard({
     }
   }
 
+  const removeLabel = own ? 'Remove bookmark' : 'Remove this bookmark for everyone';
+  const confirmRemoveLabel = own
+    ? 'Confirm remove bookmark'
+    : 'Confirm remove this bookmark for everyone';
   const primaryClass = label ? 'ic-bookmark-card-label' : 'ic-card-anchor ic-bookmark-card-quote';
   const primaryText = label || quoteText;
 
@@ -167,51 +179,82 @@ export function BookmarkCard({
           {own && shared && <span className="ic-bookmark-card-shared">Shared</span>}
         </span>
       </div>
-      {root.capabilities.hide === true && draft === null && (
-        <Tooltip
-          content={
-            shared
-              ? 'Everyone with access can see this bookmark. Click to keep it to yourself'
-              : 'Only you can see this bookmark. Click to share it'
-          }
-        >
-          <button
-            type="button"
-            className={`ic-icon-btn ic-icon-btn-visibility${
-              shared ? '' : ' ic-icon-btn-visibility-active'
-            }`}
-            disabled={sharing}
-            aria-pressed={shared}
-            aria-label={shared ? 'Make bookmark private' : 'Share bookmark'}
-            onClick={() => void toggleShared()}
-          >
-            {shared ? <Eye strokeWidth={2.25} /> : <EyeOff strokeWidth={2.25} />}
-          </button>
-        </Tooltip>
-      )}
-      {root.capabilities.edit && draft === null && (
-        <button
-          type="button"
-          className="ic-icon-btn"
-          onClick={startEditing}
-          title={label ? 'Edit label' : 'Add a label'}
-          aria-label={label ? 'Edit label' : 'Add a label'}
-        >
-          <Pencil1Icon />
-        </button>
-      )}
-      {root.capabilities.delete && (
-        <button
-          type="button"
-          className="ic-icon-btn ic-icon-btn-danger"
-          onClick={() => void remove()}
-          disabled={removing}
-          title={own ? 'Remove bookmark' : 'Remove this bookmark for everyone'}
-          aria-label={own ? 'Remove bookmark' : 'Remove this bookmark for everyone'}
-        >
-          <Cross2Icon />
-        </button>
-      )}
+      {draft === null &&
+        (confirmingRemove ? (
+          <>
+            <Tooltip content="Cancel">
+              <button
+                type="button"
+                className="ic-icon-btn"
+                onClick={() => setConfirmingRemove(false)}
+                disabled={removing}
+                aria-label="Cancel"
+              >
+                <Cross2Icon />
+              </button>
+            </Tooltip>
+            <Tooltip content={confirmRemoveLabel}>
+              <button
+                type="button"
+                className="ic-icon-btn ic-icon-btn-danger"
+                onClick={() => void remove()}
+                disabled={removing}
+                aria-label={confirmRemoveLabel}
+              >
+                <TrashIcon />
+              </button>
+            </Tooltip>
+          </>
+        ) : (
+          <>
+            {root.capabilities.hide === true && (
+              <Tooltip
+                content={
+                  shared
+                    ? 'Everyone with access can see this bookmark. Click to keep it to yourself'
+                    : 'Only you can see this bookmark. Click to share it'
+                }
+              >
+                <button
+                  type="button"
+                  className={`ic-icon-btn ic-icon-btn-visibility${
+                    shared ? '' : ' ic-icon-btn-visibility-active'
+                  }`}
+                  disabled={sharing}
+                  aria-pressed={shared}
+                  aria-label={shared ? 'Make bookmark private' : 'Share bookmark'}
+                  onClick={() => void toggleShared()}
+                >
+                  {shared ? <Eye strokeWidth={2.25} /> : <EyeOff strokeWidth={2.25} />}
+                </button>
+              </Tooltip>
+            )}
+            {root.capabilities.edit && (
+              <Tooltip content={label ? 'Edit label' : 'Add a label'}>
+                <button
+                  type="button"
+                  className="ic-icon-btn"
+                  onClick={startEditing}
+                  aria-label={label ? 'Edit label' : 'Add a label'}
+                >
+                  <Pencil1Icon />
+                </button>
+              </Tooltip>
+            )}
+            {root.capabilities.delete && (
+              <Tooltip content={removeLabel}>
+                <button
+                  type="button"
+                  className="ic-icon-btn ic-icon-btn-danger"
+                  onClick={() => setConfirmingRemove(true)}
+                  aria-label={removeLabel}
+                >
+                  <TrashIcon />
+                </button>
+              </Tooltip>
+            )}
+          </>
+        ))}
     </article>
   );
 }

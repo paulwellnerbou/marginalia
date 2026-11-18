@@ -1,5 +1,11 @@
 import { DOC_META_ATTR, type DocMetaKind, isDocMetaKind } from '@marginalia/renderer/doc-meta';
-import { BookmarkFilledIcon, BookmarkIcon, ChatBubbleIcon } from '@radix-ui/react-icons';
+import {
+  BookmarkFilledIcon,
+  BookmarkIcon,
+  ChatBubbleIcon,
+  Cross2Icon,
+  TrashIcon,
+} from '@radix-ui/react-icons';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { anchorElements } from '../lib/anchor-target.js';
 import type { CommentAnchor } from '../lib/api.js';
@@ -16,8 +22,8 @@ interface Props {
   onEditChapter?: (headingBlockId: string, headingCopy: number) => void;
   /** Opens the editor on just the summary or about region the block sits in. */
   onEditDocMeta?: (kind: DocMetaKind) => void;
-  /** Whether this block element already carries one of the reader's bookmarks. */
-  isBookmarked?: (el: HTMLElement) => boolean;
+  /** The reader's bookmark on this block element, if it carries one. */
+  bookmarkOf?: (el: HTMLElement) => { label: string; shared: boolean } | null;
   /** Adds the reader's bookmark to the block, or removes it. */
   onToggleBookmark?: (el: HTMLElement) => void;
 }
@@ -53,7 +59,7 @@ export function BlockActions({
   onPropose,
   onEditChapter,
   onEditDocMeta,
-  isBookmarked,
+  bookmarkOf,
   onToggleBookmark,
 }: Props) {
   const [hoveredTarget, setHoveredTarget] = useState<{
@@ -72,6 +78,8 @@ export function BlockActions({
   const actionsRef = useRef<HTMLDivElement | null>(null);
   const hideTimeoutRef = useRef<number | null>(null);
   const [buttonSize, setButtonSize] = useState({ width: 0, height: 0 });
+  // By element: moving to another block must not carry the prompt along.
+  const [confirmingRemove, setConfirmingRemove] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -161,6 +169,7 @@ export function BlockActions({
       hideTimeoutRef.current = null;
     }
 
+    setConfirmingRemove(null);
     if (!hoveredTarget) {
       setIsVisible(false);
       return;
@@ -218,8 +227,22 @@ export function BlockActions({
 
   function toggleBookmark() {
     const el = targetElement();
+    if (!el) return;
+    // An unlabelled private bookmark costs a click to put back. A label is
+    // the reader's writing, and a re-added bookmark starts out private, so
+    // the others ask first.
+    if (bookmark && (bookmark.label || bookmark.shared)) {
+      setConfirmingRemove(el);
+      return;
+    }
     // Opens nothing, so the row stays: the label flips under the cursor
     // and a second click takes the bookmark back off.
+    onToggleBookmark?.(el);
+  }
+
+  function confirmRemoveBookmark() {
+    const el = targetElement();
+    setConfirmingRemove(null);
     if (el) onToggleBookmark?.(el);
   }
 
@@ -246,7 +269,12 @@ export function BlockActions({
   // Same test captureBlockAnchor applies, so the button never does nothing.
   const commentable =
     !!onComment && !!targetEl && isBookmarkableBlock(targetEl) && blockTextOf(targetEl) !== '';
-  const bookmarked = targetEl ? (isBookmarked?.(targetEl) ?? false) : false;
+  const bookmark = targetEl ? (bookmarkOf?.(targetEl) ?? null) : null;
+  const bookmarked = bookmark !== null;
+  const confirming = bookmarked && confirmingRemove !== null && confirmingRemove === targetEl;
+  const confirmRemoveLabel = bookmark?.shared
+    ? 'Confirm remove this bookmark for everyone'
+    : 'Confirm remove bookmark';
   // An AsciiDoc region is itself the block, a Markdown one wraps its blocks.
   const regionKind = renderedTarget.el.closest(`[${DOC_META_ATTR}]`)?.getAttribute(DOC_META_ATTR);
   const docMetaKind = onEditDocMeta && isDocMetaKind(regionKind) ? regionKind : null;
@@ -289,27 +317,52 @@ export function BlockActions({
       >
         ✎ Propose edit
       </button>
-      {onToggleBookmark && targetEl && isBookmarkableBlock(targetEl) && (
-        <button
-          type="button"
-          className={`block-actions-btn${bookmarked ? ' block-actions-btn-on' : ''}`}
-          aria-pressed={bookmarked}
-          onClick={toggleBookmark}
-          title={
-            bookmarked
-              ? 'Remove your bookmark from this block'
-              : 'Bookmark this block — only you can see it'
-          }
-          aria-label={bookmarked ? 'Remove bookmark' : 'Add bookmark'}
-        >
-          {bookmarked ? (
-            <BookmarkFilledIcon className="block-actions-icon" aria-hidden />
-          ) : (
-            <BookmarkIcon className="block-actions-icon" aria-hidden />
-          )}
-          {bookmarked ? 'Bookmarked' : 'Bookmark'}
-        </button>
-      )}
+      {onToggleBookmark &&
+        targetEl &&
+        isBookmarkableBlock(targetEl) &&
+        (confirming ? (
+          <>
+            <button
+              type="button"
+              className="block-actions-btn"
+              onClick={() => setConfirmingRemove(null)}
+              title="Cancel"
+              aria-label="Cancel"
+            >
+              <Cross2Icon className="block-actions-icon" aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="block-actions-btn block-actions-btn-danger"
+              onClick={confirmRemoveBookmark}
+              title={confirmRemoveLabel}
+              aria-label={confirmRemoveLabel}
+            >
+              <TrashIcon className="block-actions-icon" aria-hidden />
+              {bookmark?.shared ? 'Remove for everyone' : 'Remove bookmark'}
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className={`block-actions-btn${bookmarked ? ' block-actions-btn-on' : ''}`}
+            aria-pressed={bookmarked}
+            onClick={toggleBookmark}
+            title={
+              bookmarked
+                ? 'Remove your bookmark from this block'
+                : 'Bookmark this block — only you can see it'
+            }
+            aria-label={bookmarked ? 'Remove bookmark' : 'Add bookmark'}
+          >
+            {bookmarked ? (
+              <BookmarkFilledIcon className="block-actions-icon" aria-hidden />
+            ) : (
+              <BookmarkIcon className="block-actions-icon" aria-hidden />
+            )}
+            {bookmarked ? 'Bookmarked' : 'Bookmark'}
+          </button>
+        ))}
       {docMetaKind && (
         <button
           type="button"

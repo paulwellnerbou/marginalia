@@ -2921,12 +2921,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   // The hover button adds and removes the reader's own bookmark; one
   // somebody else shared on the same block is not theirs to take off.
   const ownBookmarkMarkers = useMemo(() => bookmarkMarkers.filter((b) => b.own), [bookmarkMarkers]);
-  const isBlockBookmarked = useCallback(
-    (el: HTMLElement): boolean => {
+  const blockBookmark = useCallback(
+    (el: HTMLElement): { label: string; shared: boolean } | null => {
       const root = docRef.current;
-      return root ? bookmarkMarking(root, el, ownBookmarkMarkers) !== null : false;
+      const marking = root ? bookmarkMarking(root, el, ownBookmarkMarkers) : null;
+      if (!marking) return null;
+      const opener = bookmarkThreads.find((t) => t.id === marking.threadId)?.comments[0];
+      return { label: opener?.body.trim() ?? '', shared: opener ? opener.hidden !== true : false };
     },
-    [ownBookmarkMarkers],
+    [ownBookmarkMarkers, bookmarkThreads],
   );
   // Blocks with a bookmark request still out: the hover button stays under
   // the cursor, and a second click before the first lands would post twice.
@@ -3925,7 +3928,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                             rootRef={docRef}
                             onComment={startCommentDraft}
                             onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-                            isBookmarked={isBlockBookmarked}
+                            bookmarkOf={blockBookmark}
                             onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
                             onEditChapter={(headingBlockId, headingCopy) =>
                               navigate(
