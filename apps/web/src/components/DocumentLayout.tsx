@@ -176,6 +176,12 @@ import {
   forgetLegacyBookmarkedThreadIds,
   legacyBookmarkedThreadIds,
 } from './inline-comments/bookmarkedThreads.js';
+import {
+  type BookmarkFilter,
+  countBookmarkCards,
+  loadBookmarkFilter,
+  saveBookmarkFilter,
+} from './inline-comments/bookmarkFilter.js';
 import { FloatingCommentsLayer } from './inline-comments/FloatingCommentsLayer.js';
 import { FloatingCommentsToolbar } from './inline-comments/FloatingCommentsToolbar.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
@@ -604,6 +610,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     docUid: string;
     count: number;
   } | null>(null);
+  // Held here rather than in the tab so its badge can count under it while closed.
+  const [bookmarkFilter, setBookmarkFilterState] = useState<BookmarkFilter>(() =>
+    loadBookmarkFilter(doc.uid),
+  );
+  const setBookmarkFilter = useCallback(
+    (next: BookmarkFilter) => {
+      setBookmarkFilterState(next);
+      saveBookmarkFilter(doc.uid, next);
+    },
+    [doc.uid],
+  );
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
   /**
    * How many resolved threads the document has, as the server counts them.
@@ -2902,6 +2919,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     sectionFilter,
   ]);
   const hasBookmarks = bookmarkedThreadIds.size > 0 || bookmarkThreads.length > 0;
+  const bookmarkCount = useMemo(
+    () => countBookmarkCards(bookmarkedThreads, bookmarkFilter),
+    [bookmarkedThreads, bookmarkFilter],
+  );
   // "No bookmarks" is only known once a read has answered and this browser's
   // local ones are uploaded; until then a remembered tab stays put rather
   // than being switched away, and that choice saved, for good.
@@ -3071,8 +3092,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       cancelled = true;
     };
   }, [bookmarksOnServer, doc.uid, resolveIdentity]);
-  // The Bookmarks tab badge counts the in-scope bookmarks directly, so it
-  // has no use for the list's search-filtered count.
+  // The Bookmarks tab badge counts the in-scope bookmarks under the owner
+  // filter directly, so it has no use for the list's search-filtered count.
   const ignoreVisibleCount = useCallback(() => {}, []);
   // Given to every card through context so the toggle works the same in
   // the list, the margin column and the floating layer without drilling.
@@ -4090,9 +4111,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                               <Flex align="center" gap="2">
                                 <BookmarkIcon aria-hidden />
                                 Bookmarks
-                                {bookmarkedThreads.length > 0 && (
+                                {bookmarkCount > 0 && (
                                   <Badge size="1" variant="soft" color="gray" radius="full">
-                                    {bookmarkedThreads.length}
+                                    {bookmarkCount}
                                   </Badge>
                                 )}
                               </Flex>
@@ -4166,6 +4187,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                             threads={bookmarkedThreads}
                             loading={threadsLoading || archiveLoading}
                             onVisibleCountChange={ignoreVisibleCount}
+                            bookmarkFilter={bookmarkFilter}
+                            onBookmarkFilterChange={setBookmarkFilter}
                             resolvedThreadCount={resolvedThreadCount}
                             sectionFilterCount={sectionFilter.size}
                             onClearSectionFilter={clearSectionFilter}

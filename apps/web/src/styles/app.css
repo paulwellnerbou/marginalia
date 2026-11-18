@@ -3766,8 +3766,9 @@ button.primary:disabled {
 }
 
 /* Stacked rows: the search box, then the sort button with the overflow menu,
-   then the filter chips. A column rather than one wrapping line — wrapping
-   would put them wherever they happened to fit. */
+   then the filter chips — or, in the Bookmarks tab, the whose-bookmark toggle
+   above the search box and no menu or chips. A column rather than one
+   wrapping line — wrapping would put them wherever they happened to fit. */
 .ic-list-controls {
   display: flex;
   flex-direction: column;
@@ -3782,6 +3783,11 @@ button.primary:disabled {
   padding: 0.8rem 0.9rem 0.45rem;
   background: var(--ui-surface);
   border-bottom: 1px solid var(--ui-border);
+}
+
+/* Spans the pane so the three choices split it evenly. */
+.ic-list-bookmark-filter {
+  width: 100%;
 }
 
 .ic-list-controls-bottom {

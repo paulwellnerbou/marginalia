@@ -32,6 +32,7 @@ const PREFS = [
   'threadListStatus',
   'threadListKind',
   'threadListReplies',
+  'bookmarkListFilter',
 ] as const;
 
 export type DocViewPref = (typeof PREFS)[number];
