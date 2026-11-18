@@ -39,9 +39,8 @@ import { BookmarkCard } from './BookmarkCard.js';
 import {
   type BookmarkFilter,
   bookmarkFilterSplits,
-  loadBookmarkFilter,
   matchesBookmarkFilter,
-  saveBookmarkFilter,
+  parseBookmarkFilter,
 } from './bookmarkFilter.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils.js';
@@ -114,6 +113,9 @@ interface Props {
    * filter row that is the only way to ask for the settled ones.
    */
   resolvedThreadCount?: number;
+  /** Bookmarks tab: whose bookmarks to list. Owned by the caller, whose badge counts by it. */
+  bookmarkFilter?: BookmarkFilter;
+  onBookmarkFilterChange?: (filter: BookmarkFilter) => void;
   /** Number of sections the TOC's section filter is focused on; 0 = filter off. */
   sectionFilterCount?: number;
   onClearSectionFilter?: () => void;
@@ -193,6 +195,8 @@ export function InlineCommentsList({
   resolvedThreadCount = 0,
   sectionFilterCount = 0,
   onClearSectionFilter,
+  bookmarkFilter = 'all',
+  onBookmarkFilterChange,
   blockRanges,
   canComment,
   focusedThread,
@@ -266,16 +270,12 @@ export function InlineCommentsList({
   // Remembered per document, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(() => loadThreadSortMode(uid));
   const [filters, setFilters] = useState<ThreadFilters>(() => loadThreadFilters(uid));
-  const [bookmarkFilter, setBookmarkFilter] = useState<BookmarkFilter>(() =>
-    loadBookmarkFilter(uid),
-  );
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
   // The Bookmarks tab shows every bookmarked thread it is given — the
   // status/kind/replies narrowing belongs to the Threads tab alone; it
   // narrows by whose bookmark it is instead.
   const effectiveFilters = bookmarks ? ALL_THREAD_FILTERS : filters;
-  const effectiveBookmarkFilter: BookmarkFilter = bookmarks ? bookmarkFilter : 'all';
 
   /*
    * The one card listed although the filters or search hide it: the
@@ -340,10 +340,10 @@ export function InlineCommentsList({
   const itemPassesFilters = useCallback(
     (item: ThreadListItem) =>
       cardMatchesFilters(item, effectiveFilters, viewerClientId) &&
-      matchesBookmarkFilter(item.thread, effectiveBookmarkFilter) &&
+      matchesBookmarkFilter(item.thread, bookmarkFilter) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
-    [effectiveFilters, effectiveBookmarkFilter, searchNeedle, viewerClientId],
+    [effectiveFilters, bookmarkFilter, searchNeedle, viewerClientId],
   );
   // The requested card is listed whatever the filters say — see planThreadFocus.
   const itemMatches = useCallback(
@@ -583,6 +583,7 @@ export function InlineCommentsList({
           onRemove={onDeleteThread}
           onEditLabel={onEdit}
           onSetHidden={onSetHidden}
+          onDismissRevealed={revealed ? dismissRevealed : undefined}
         />
       );
     }
@@ -678,9 +679,7 @@ export function InlineCommentsList({
               className="ic-list-bookmark-filter"
               value={bookmarkFilter}
               onValueChange={(value) => {
-                const next = value === 'shared' || value === 'mine' ? value : 'all';
-                setBookmarkFilter(next);
-                saveBookmarkFilter(uid, next);
+                onBookmarkFilterChange?.(parseBookmarkFilter(value));
                 setRevealed(null);
                 resetListScroll();
               }}

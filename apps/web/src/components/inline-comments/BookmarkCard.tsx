@@ -26,6 +26,8 @@ interface Props {
   /** Resolves `false` when the save failed, so the field keeps the draft. */
   onEditLabel: (commentId: string, label: string) => Promise<boolean | void>;
   onSetHidden: (commentId: string, hidden: boolean) => Promise<void>;
+  /** Set while the card is listed only because the reader opened it. */
+  onDismissRevealed?: (() => void) | undefined;
 }
 
 /**
@@ -45,6 +47,7 @@ export function BookmarkCard({
   onRemove,
   onEditLabel,
   onSetHidden,
+  onDismissRevealed,
 }: Props) {
   const [removing, setRemoving] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
@@ -177,6 +180,19 @@ export function BookmarkCard({
             {formatTimestamp(root.created_at)}
           </span>
           {own && shared && <span className="ic-bookmark-card-shared">Shared</span>}
+          {onDismissRevealed && (
+            <Tooltip content="Outside the current filter or search — listed because you opened it. Click to hide it again.">
+              <button
+                type="button"
+                className="ic-badge ic-badge-revealed"
+                onClick={onDismissRevealed}
+                aria-label="Outside filters — hide this bookmark again"
+              >
+                Outside filters
+                <Cross2Icon className="ic-badge-icon" aria-hidden="true" />
+              </button>
+            </Tooltip>
+          )}
         </span>
       </div>
       {draft === null &&

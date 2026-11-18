@@ -1,8 +1,29 @@
 /// <reference types="bun" />
 
-import { expect, test } from 'bun:test';
+import { beforeEach, expect, test } from 'bun:test';
 import type { Thread } from '../../lib/api.js';
-import { bookmarkFilterSplits, matchesBookmarkFilter } from './bookmarkFilter.js';
+import {
+  bookmarkFilterSplits,
+  countBookmarkCards,
+  loadBookmarkFilter,
+  matchesBookmarkFilter,
+  saveBookmarkFilter,
+} from './bookmarkFilter.js';
+
+// Bun has no Web Storage; reinstalled per test so a sibling file's stub can't win.
+const store = new Map<string, string>();
+beforeEach(() => {
+  store.clear();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    },
+  });
+});
 
 function thread(id: string, { bookmark = false, own = false, hidden = false } = {}): Thread {
   return {
@@ -79,4 +100,22 @@ test('the filter is only worth offering when it tells bookmarks apart', () => {
   expect(bookmarkFilterSplits([ownShared, ownShared])).toBe(false);
   expect(bookmarkFilterSplits([ownPrivate, ownShared])).toBe(true);
   expect(bookmarkFilterSplits([ownShared, othersShared])).toBe(true);
+});
+
+test('the badge counts the cards the filter lists', () => {
+  const all = [ownPrivate, ownShared, othersShared, starred];
+  expect(countBookmarkCards(all, 'all')).toBe(4);
+  expect(countBookmarkCards(all, 'shared')).toBe(2);
+  expect(countBookmarkCards(all, 'mine')).toBe(3);
+});
+
+test('the choice is remembered per document', () => {
+  saveBookmarkFilter('d1', 'mine');
+  expect(loadBookmarkFilter('d1')).toBe('mine');
+  expect(loadBookmarkFilter('d2')).toBe('all');
+});
+
+test('an unknown stored value shows everything', () => {
+  store.set('marginalia.view.d1', JSON.stringify({ bookmarkListFilter: 'public' }));
+  expect(loadBookmarkFilter('d1')).toBe('all');
 });

@@ -1,6 +1,7 @@
 import { isBookmark, type Thread } from '../../lib/api.js';
 import { isOwnBookmark } from '../../lib/bookmark-markers.js';
 import { readDocViewPref, writeDocViewPref } from '../../lib/doc-view-prefs.js';
+import { buildThreadListCards } from './threadListCards.js';
 
 /** Bookmarks-tab narrowing: everything, what everyone sees, or the viewer's own. */
 export type BookmarkFilter = 'all' | 'shared' | 'mine';
@@ -36,9 +37,26 @@ export function bookmarkFilterSplits(threads: readonly Thread[]): boolean {
   return false;
 }
 
+/**
+ * The cards the Bookmarks tab lists under `filter`, counted as it counts
+ * them — a proposal nested in a starred comment is part of that card — so
+ * the tab's badge agrees with the tab while it is closed.
+ */
+export function countBookmarkCards(threads: Thread[], filter: BookmarkFilter): number {
+  let count = 0;
+  for (const card of buildThreadListCards(threads).cards) {
+    if (matchesBookmarkFilter(card.thread, filter)) count++;
+  }
+  return count;
+}
+
+/** Anything unrecognised — junk in storage, a value from a newer build — shows everything. */
+export function parseBookmarkFilter(value: string | null): BookmarkFilter {
+  return value === 'shared' || value === 'mine' ? value : 'all';
+}
+
 export function loadBookmarkFilter(docUid: string): BookmarkFilter {
-  const saved = readDocViewPref(docUid, 'bookmarkListFilter');
-  return saved === 'shared' || saved === 'mine' ? saved : 'all';
+  return parseBookmarkFilter(readDocViewPref(docUid, 'bookmarkListFilter'));
 }
 
 export function saveBookmarkFilter(docUid: string, filter: BookmarkFilter): void {
