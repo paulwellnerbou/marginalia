@@ -6,7 +6,14 @@ import {
   MagnifyingGlassIcon,
   TextAlignLeftIcon,
 } from '@radix-ui/react-icons';
-import { Button, DropdownMenu, IconButton, Text, TextField } from '@radix-ui/themes';
+import {
+  Button,
+  DropdownMenu,
+  IconButton,
+  SegmentedControl,
+  Text,
+  TextField,
+} from '@radix-ui/themes';
 import { ArrowUpDownIcon, FunnelIcon } from 'lucide-react';
 import {
   type ReactNode,
@@ -29,6 +36,13 @@ import {
   type ThreadCollapseState,
 } from '../threadCollapseState.js';
 import { BookmarkCard } from './BookmarkCard.js';
+import {
+  type BookmarkFilter,
+  bookmarkFilterSplits,
+  loadBookmarkFilter,
+  matchesBookmarkFilter,
+  saveBookmarkFilter,
+} from './bookmarkFilter.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils.js';
 import {
@@ -252,11 +266,16 @@ export function InlineCommentsList({
   // Remembered per document, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(() => loadThreadSortMode(uid));
   const [filters, setFilters] = useState<ThreadFilters>(() => loadThreadFilters(uid));
+  const [bookmarkFilter, setBookmarkFilter] = useState<BookmarkFilter>(() =>
+    loadBookmarkFilter(uid),
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
   // The Bookmarks tab shows every bookmarked thread it is given — the
-  // status/kind/replies narrowing belongs to the Threads tab alone.
+  // status/kind/replies narrowing belongs to the Threads tab alone; it
+  // narrows by whose bookmark it is instead.
   const effectiveFilters = bookmarks ? ALL_THREAD_FILTERS : filters;
+  const effectiveBookmarkFilter: BookmarkFilter = bookmarks ? bookmarkFilter : 'all';
 
   /*
    * The one card listed although the filters or search hide it: the
@@ -321,9 +340,10 @@ export function InlineCommentsList({
   const itemPassesFilters = useCallback(
     (item: ThreadListItem) =>
       cardMatchesFilters(item, effectiveFilters, viewerClientId) &&
+      matchesBookmarkFilter(item.thread, effectiveBookmarkFilter) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
-    [effectiveFilters, searchNeedle, viewerClientId],
+    [effectiveFilters, effectiveBookmarkFilter, searchNeedle, viewerClientId],
   );
   // The requested card is listed whatever the filters say — see planThreadFocus.
   const itemMatches = useCallback(
@@ -339,6 +359,11 @@ export function InlineCommentsList({
     [sortedOrphans, itemMatches],
   );
   const visibleCount = visibleActive.length + visibleOrphans.length;
+  // Kept while narrowed, so a filter that empties the list can be undone.
+  const showBookmarkFilter = useMemo(
+    () => bookmarks && (bookmarkFilter !== 'all' || bookmarkFilterSplits(threads)),
+    [bookmarks, bookmarkFilter, threads],
+  );
 
   useEffect(() => {
     onVisibleCountChange(visibleCount);
@@ -636,10 +661,10 @@ export function InlineCommentsList({
           count to one — or a filter hiding every thread there is — would
           strand the reader with no way to clear it. A document with no
           threads at all, settled ones included, has nothing to filter. The
-          Bookmarks tab has no filter chips to keep reachable, so its row is
-          worth a slot only to sort or search across more than one card. */}
+          Bookmarks tab has no filter chips, so its row is worth a slot only to
+          narrow, sort or search across more than one card. */}
       {(bookmarks
-        ? totalCards > 1 || searchQuery !== ''
+        ? totalCards > 1 || searchQuery !== '' || bookmarkFilter !== 'all'
         : showThreadListControls({
             totalCards,
             resolvedCount: resolvedThreadCount,
@@ -647,6 +672,29 @@ export function InlineCommentsList({
             filters,
           })) && (
         <div className="ic-list-controls">
+          {showBookmarkFilter && (
+            <SegmentedControl.Root
+              size="1"
+              className="ic-list-bookmark-filter"
+              value={bookmarkFilter}
+              onValueChange={(value) => {
+                const next = value === 'shared' || value === 'mine' ? value : 'all';
+                setBookmarkFilter(next);
+                saveBookmarkFilter(uid, next);
+                setRevealed(null);
+                resetListScroll();
+              }}
+              aria-label="Show bookmarks"
+            >
+              <SegmentedControl.Item value="all">All</SegmentedControl.Item>
+              <SegmentedControl.Item value="shared" title="Bookmarks everyone with access can see">
+                Shared
+              </SegmentedControl.Item>
+              <SegmentedControl.Item value="mine" title="Bookmarks you made">
+                Mine
+              </SegmentedControl.Item>
+            </SegmentedControl.Root>
+          )}
           {/* No disclosure: the box has a row to itself either way, so a
               magnifier that only uncovers it costs a control and a state to
               save nothing. */}
@@ -721,24 +769,28 @@ export function InlineCommentsList({
               <ArrowUpDownIcon className="ic-list-sort-swap" aria-hidden />
             </button>
 
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger>
-                <IconButton
-                  variant="ghost"
-                  size="1"
-                  color="gray"
-                  className="ic-list-menu-trigger"
-                  aria-label="More thread actions"
-                >
-                  <DotsHorizontalIcon />
-                </IconButton>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content align="end">
-                <DropdownMenu.Item onSelect={collapseAll} disabled={allCollapsed}>
-                  Collapse all threads
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
+            {/* Collapsing every thread is Threads-tab housekeeping; the
+                Bookmarks tab is a short list of places. */}
+            {!bookmarks && (
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger>
+                  <IconButton
+                    variant="ghost"
+                    size="1"
+                    color="gray"
+                    className="ic-list-menu-trigger"
+                    aria-label="More thread actions"
+                  >
+                    <DotsHorizontalIcon />
+                  </IconButton>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Content align="end">
+                  <DropdownMenu.Item onSelect={collapseAll} disabled={allCollapsed}>
+                    Collapse all threads
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Root>
+            )}
 
             {/* Compact enough to stay put, so there is no disclosure to open and
                 no dot to say a filter is on: an unlit chip *is* "all". The
@@ -805,7 +857,7 @@ export function InlineCommentsList({
         presenceRows.length + orphanRows.length === 0 && (
           <div className="ic-list-empty" data-empty-state="">
             {bookmarks
-              ? bookmarksEmptyMessage(searchNeedle !== '', sectionFilterCount)
+              ? bookmarksEmptyMessage(searchNeedle !== '', sectionFilterCount, bookmarkFilter)
               : threadListEmptyMessage({
                   totalCards,
                   resolvedCount: resolvedThreadCount,
@@ -837,10 +889,20 @@ export function InlineCommentsList({
 }
 
 /** What the Bookmarks tab says when it is showing no cards. */
-function bookmarksEmptyMessage(searching: boolean, sectionFilterCount: number): string {
+function bookmarksEmptyMessage(
+  searching: boolean,
+  sectionFilterCount: number,
+  filter: BookmarkFilter,
+): string {
   if (searching) return 'No bookmarks match this search.';
-  if (sectionFilterCount > 0) return 'No bookmarks in the focused sections.';
-  return 'No bookmarks.';
+  const which =
+    filter === 'shared'
+      ? 'shared bookmarks'
+      : filter === 'mine'
+        ? 'bookmarks of yours'
+        : 'bookmarks';
+  if (sectionFilterCount > 0) return `No ${which} in the focused sections.`;
+  return `No ${which}.`;
 }
 
 function shouldAutoCollapse(t: Thread): boolean {
